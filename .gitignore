@@ -172,3 +172,8 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# 忽略所有临时目录
+/temp/
+*.tmp
+*.log
