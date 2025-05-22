@@ -30,5 +30,6 @@ A group assignment for Peking University, an agent that helps you make travel pl
     - 主要依赖：
         - `markdown`
         - `pdfkit`
+        - `python-dotenv`  # 用于环境变量加载
 
 如需更多帮助，请参考各工具的官方文档。
