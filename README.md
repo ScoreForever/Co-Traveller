@@ -32,4 +32,12 @@ A group assignment for Peking University, an agent that helps you make travel pl
         - `pdfkit`
         - `python-dotenv`  # 用于环境变量加载
 
+## API 密钥配置
+
+请在项目根目录下新建或编辑 `API.env` 文件，并写入如下内容（将密钥替换为你自己的）：
+```
+SILICON_API_KEY=你的API密钥
+```
+**注意：** `API.env` 文件已被 `.gitignore` 忽略，请勿将密钥提交到公共仓库。
+
 如需更多帮助，请参考各工具的官方文档。
