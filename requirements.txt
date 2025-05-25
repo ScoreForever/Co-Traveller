@@ -3,6 +3,6 @@ pdfkit
 dotenv
 gradio
 numpy
-PIL
+pillow
 pydub
 pandas
