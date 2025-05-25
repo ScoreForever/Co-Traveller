@@ -18,8 +18,20 @@ import re
 # 依赖库：请确保已安装以下库
 # pip install gradio requests pillow pydub pandas
 
-# 高德地图 API 密钥（请替换为有效的密钥）
-AMAP_API_KEY = "27c0337b84e44bb373bb2724a6ea157d"  # 请替换为您的实际高德地图 API 密钥
+# 加载API密钥
+from dotenv import load_dotenv
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../../API.env'))
+
+# 高德地图 API 密钥
+AMAP_API_KEY = os.getenv("AMAP_API_KEY", "")  # API.env中需添加AMAP_API_KEY
+
+# 百度语音API密钥
+BAIDU_API_KEY = os.getenv("BAIDU_API_KEY", "")  # API.env中需添加BAIDU_API_KEY
+BAIDU_SECRET_KEY = os.getenv("BAIDU_SECRET_KEY", "")  # API.env中需添加BAIDU_SECRET_KEY
+BAIDU_APP_ID = os.getenv("BAIDU_APP_ID", "")  # API.env中需添加BAIDU_APP_ID
+
+# 大模型密钥（统一用SILICON_API_KEY）
+SILICON_API_KEY = os.getenv("SILICON_API_KEY", "")
 
 def is_valid_date(date_str):
     """验证日期是否为YYYY-MM-DD格式且在当日或之后"""
@@ -397,12 +409,12 @@ def generate_city_map(place, date):
         print(f"获取地图失败: {e}")
         return None, "加载地图失败"
 
-def speech_to_text(audio_path, api_key):
+def speech_to_text(audio_path, api_key=None):
     """调用语音转文字API（示例使用百度语音识别）"""
     API_URL = "https://vop.baidu.com/server_api"
-    APP_ID = "YOUR_APP_ID"  # 请替换
-    API_KEY = api_key
-    SECRET_KEY = "YOUR_SECRET_KEY"  # 请替换
+    APP_ID = BAIDU_APP_ID
+    API_KEY = BAIDU_API_KEY
+    SECRET_KEY = BAIDU_SECRET_KEY
 
     audio = AudioSegment.from_file(audio_path)
     wav_path = "temp.wav"
@@ -437,7 +449,7 @@ def get_access_token(api_key, secret_key):
 
 def chat_with_agent(text, chat_history):
     """模拟智能体对话（需替换为真实LLM API）"""
-    api_key = "YOUR_OPENAI_API_KEY"  # 请替换
+    api_key = SILICON_API_KEY  # 使用API.env中的SILICON_API_KEY
     headers = {"Authorization": f"Bearer {api_key}"}
     payload = {
         "model": "gpt-3.5-turbo",
@@ -677,15 +689,15 @@ with gr.Blocks() as demo:
             with gr.Column():
                 chatbot = gr.Chatbot(label="旅行助手", type="messages", height=600)
     
-        def process_speech(audio_path, chat_history, api_key):
+        def process_speech(audio_path, chat_history, api_key=None):
             if not audio_path:
                 return "请先上传语音文件", chat_history
-            text = speech_to_text(audio_path, api_key)
+            text = speech_to_text(audio_path)
             return chat_with_agent(text, chat_history)
     
         stt_btn.click(
             fn=process_speech,
-            inputs=[audio_input, chat_state, gr.Textbox(visible=False, value="YOUR_BAIDU_API_KEY")],  # 请替换
+            inputs=[audio_input, chat_state],  # 移除api_key输入
             outputs=[gr.Textbox(visible=False), chatbot]
         )
     
