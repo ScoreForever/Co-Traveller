@@ -15,23 +15,35 @@ from pathlib import Path
 import pandas as pd
 import re
 
-# 依赖库：请确保已安装以下库
-# pip install gradio requests pillow pydub pandas
+def load_env(filepath):
+    """从.env文件读取环境变量"""
+    env = {}
+    if os.path.exists(filepath):
+        with open(filepath, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    env[k.strip()] = v.strip()
+    return env
 
-# 加载API密钥
-from dotenv import load_dotenv
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../../API.env'))
+# 读取API.env
+env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "API.env")
+env_vars = load_env(env_path)
 
-# 高德地图 API 密钥
-AMAP_API_KEY = os.getenv("AMAP_API_KEY", "")  # API.env中需添加AMAP_API_KEY
+# 高德地图 API 密钥（从API.env读取）
+AMAP_API_KEY = env_vars.get("AMAP_API_KEY")
+if not AMAP_API_KEY:
+    raise RuntimeError("API.env 文件中缺少 AMAP_API_KEY 配置项")
 
-# 百度语音API密钥
-BAIDU_API_KEY = os.getenv("BAIDU_API_KEY", "")  # API.env中需添加BAIDU_API_KEY
-BAIDU_SECRET_KEY = os.getenv("BAIDU_SECRET_KEY", "")  # API.env中需添加BAIDU_SECRET_KEY
-BAIDU_APP_ID = os.getenv("BAIDU_APP_ID", "")  # API.env中需添加BAIDU_APP_ID
+# 百度语音API配置（从API.env读取）
+BAIDU_API_KEY = env_vars.get("BAIDU_API_KEY", "")
+BAIDU_SECRET_KEY = env_vars.get("BAIDU_SECRET_KEY", "")
+BAIDU_APP_ID = env_vars.get("BAIDU_APP_ID", "")
 
-# 大模型密钥（统一用SILICON_API_KEY）
-SILICON_API_KEY = os.getenv("SILICON_API_KEY", "")
+SILICON_API_KEY = env_vars.get("SILICON_API_KEY", "")
 
 def is_valid_date(date_str):
     """验证日期是否为YYYY-MM-DD格式且在当日或之后"""
@@ -441,15 +453,21 @@ def speech_to_text(audio_path, api_key=None):
     else:
         return "语音识别失败，请重试"
 
-def get_access_token(api_key, secret_key):
+def get_access_token(api_key=None, secret_key=None):
     """获取百度语音API访问令牌"""
+    if not api_key:
+        api_key = BAIDU_API_KEY
+    if not secret_key:
+        secret_key = BAIDU_SECRET_KEY
     token_url = f"https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id={api_key}&client_secret={secret_key}"
     response = requests.get(token_url)
     return response.json()["access_token"]
 
 def chat_with_agent(text, chat_history):
     """模拟智能体对话（需替换为真实LLM API）"""
-    api_key = SILICON_API_KEY  # 使用API.env中的SILICON_API_KEY
+    api_key = SILICON_API_KEY  # 使用SILICON_API_KEY
+    if not api_key:
+        return "未配置SILICON_API_KEY", chat_history
     headers = {"Authorization": f"Bearer {api_key}"}
     payload = {
         "model": "gpt-3.5-turbo",
@@ -689,15 +707,15 @@ with gr.Blocks() as demo:
             with gr.Column():
                 chatbot = gr.Chatbot(label="旅行助手", type="messages", height=600)
     
-        def process_speech(audio_path, chat_history, api_key=None):
+        def process_speech(audio_path, chat_history, api_key):
             if not audio_path:
                 return "请先上传语音文件", chat_history
-            text = speech_to_text(audio_path)
+            text = speech_to_text(audio_path, api_key)
             return chat_with_agent(text, chat_history)
     
         stt_btn.click(
             fn=process_speech,
-            inputs=[audio_input, chat_state],  # 移除api_key输入
+            inputs=[audio_input, chat_state, gr.Textbox(visible=False, value=BAIDU_API_KEY)],  # 使用env中的API_KEY
             outputs=[gr.Textbox(visible=False), chatbot]
         )
     
