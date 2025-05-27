@@ -14,12 +14,17 @@ import json
 from pathlib import Path
 import pandas as pd
 import re
+#新加入的依赖库
+import plotly.graph_objs as go
+from collections import defaultdict
+
 
 # 依赖库：请确保已安装以下库
-# pip install gradio requests pillow pydub pandas
+# pip install gradio requests pillow pydub pandas plotly
 
 # 高德地图 API 密钥（请替换为有效的密钥）
 AMAP_API_KEY = "27c0337b84e44bb373bb2724a6ea157d"  # 请替换为您的实际高德地图 API 密钥
+X_QW_API_KEY = "ace2a22669b549af8a5e9339f4594937"  # 请替换为您的实际和风天气 API 密钥
 
 def is_valid_date(date_str):
     """验证日期是否为YYYY-MM-DD格式且在当日或之后"""
@@ -724,46 +729,172 @@ with gr.Blocks() as demo:
             outputs=[place, date, map_image]
         )
 
-    with gr.Tab("智能路线规划"):
-        gr.Markdown("### 🗺️ 文本地址解析与路线规划")
-        gr.Markdown("输入包含地址的文字，系统将自动提取地址、转换为经纬度、规划路线并在地图上展示")
+    with gr.Tab("🌦️ 地点天气查询"):
+        gr.Markdown("### 输入地点，查看未来3天天气图标、描述、生活指数和地图")
+
+        with gr.Row():
+            query_place = gr.Textbox(label="输入地点", placeholder="例如：广州塔")
+            weather_btn = gr.Button("查询天气", variant="primary")
+            clear_weather_btn = gr.Button("清除")
+
+        with gr.Row():
+            icon_html_output = gr.HTML(label="天气图标")
         
         with gr.Row():
-            with gr.Column():
-                text_input = gr.Textbox(
-                    label="输入包含地址的文字", 
-                    placeholder="例如：我要从北京市朝阳区三里屯出发，去故宫博物院，然后到天安门广场",
-                    lines=4
-                )
-                with gr.Row():
-                    process_btn = gr.Button("🚀 开始规划", variant="primary")
-                    clear_text_btn = gr.Button("清除")
-                result_text = gr.Textbox(label="处理结果", lines=6, interactive=False)
-            
-            with gr.Column():
-                map_display = gr.HTML(
-                    label="路线地图",
-                    value="""<div style="width: 100%; height: 400px; text-align: center; line-height: 400px;">请输入地址并点击“开始规划”来显示地图</div>"""
-                )
-        
-        def handle_route_planning(text):
-            map_html, result = process_text_to_map(text)
-            return map_html, result
-        
-        def clear_route_planning():
-            return "", "请输入地址并点击“开始规划”来显示地图", ""
-        
-        process_btn.click(
-            fn=handle_route_planning,
-            inputs=[text_input],
-            outputs=[map_display, result_text]
+            weather_output = gr.Textbox(label="天气信息", lines=10, interactive=False)
+
+        with gr.Row():
+            indices_output = gr.HTML(label="生活指数")  # ✅ 改为 HTML，支持图标展示
+
+        with gr.Row():
+            map_image_output = gr.Image(label="地图", height=400)
+            map_caption_output = gr.Textbox(label="地图说明", interactive=False)
+
+        def query_weather_full(place):
+            if not place.strip():
+                return "", "请输入地点", "", None, ""
+
+            lng, lat, detail = geocode_address(place)
+            if not lng or not lat:
+                return "", f"无法识别地点：{place}", "", None, ""
+
+            location = f"{lng},{lat}"
+            headers = {
+                "X-QW-Api-Key": X_QW_API_KEY
+
+            }
+
+            # 天气图标和文本描述
+            weather_url = "https://me3md84kpk.re.qweatherapi.com/v7/weather/3d"
+            icon_html = ""
+            try:
+                weather_resp = requests.get(weather_url, headers=headers, params={"location": location})
+                weather_data = weather_resp.json()
+                weather_summary = ""
+                if weather_resp.status_code == 200 and weather_data.get("code") == "200":
+                    daily = weather_data.get("daily", [])
+                    icon_html += '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/qweather-icons@1.6.0/font/qweather-icons.css">\n'
+                    icon_html += '<div style="display:flex;justify-content:space-around;font-size:48px;">'
+                    weather_summary = f"📍 地点：{detail}\n"
+                    for d in daily:
+                        icon = d.get("iconDay", "999")
+                        fxDate = d['fxDate']
+                        desc = d['textDay']
+                        tempMin = d['tempMin']
+                        tempMax = d['tempMax']
+                        wind = d['windDirDay']
+                        icon_html += f'''
+                            <div style="text-align:center;">
+                                <div><i class="qi-{icon}"></i></div>
+                                <div style="font-size:14px;">{fxDate}</div>
+                                <div style="font-size:14px;">{desc}</div>
+                            </div>
+                        '''
+                        weather_summary += f"\n📅 {fxDate} - {desc}，{tempMin}℃~{tempMax}℃，风向：{wind}"
+                    icon_html += "</div>"
+                else:
+                    weather_summary = f"天气查询失败：{weather_data.get('code')}"
+            except Exception as e:
+                weather_summary = f"天气请求错误：{str(e)}"
+
+            # 生活指数（图标 + 分组 + 彩色标签）
+            # 请求生活指数（图标 + 分组 + 美化 + 修复字段）
+            indices_url = "https://me3md84kpk.re.qweatherapi.com/v7/indices/3d"
+            try:
+                indices_resp = requests.get(indices_url, headers=headers, params={"location": location, "type": "1,2,3,5,6,9,14"})
+                indices_data = indices_resp.json()
+
+
+                indices_summary = '''
+                <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+                <div style="font-size:15px;line-height:1.8;">
+                '''
+
+                fa_icons = {
+                    "1": "fa-person-running",     # 运动
+                    "2": "fa-person-hiking",      # 徒步/洗车
+                    "3": "fa-shirt",              # 穿衣
+                    "5": "fa-sun",                # 紫外线
+                    "6": "fa-car",                # 洗车
+                    "9": "fa-head-side-cough",    # 感冒
+                    "14": "fa-smog"               # 晾晒/空气扩散
+                }
+
+                level_colors = {
+                    "适宜": "#4CAF50",
+                    "较适宜": "#8BC34A",
+                    "极适宜": "#43A047",
+                    "较不宜": "#B0BEC5",
+                    "较强": "#FF9800",
+                    "强": "#FF5722",
+                    "很强": "#F44336",
+                    "炎热": "#F4511E",
+                    "不适宜": "#9E9E9E",
+                    "较弱": "#90CAF9",
+                    "弱": "#42A5F5",
+                    "中等": "#FFC107",
+                    "差": "#BDBDBD",
+                    "少发": "#AED581"
+                }
+
+                from collections import defaultdict
+                date_groups = defaultdict(list)
+                for item in indices_data.get("daily", []):
+                    date_groups[item["date"]].append(item)  # ✅ 修复字段名
+
+                for date in sorted(date_groups.keys()):
+                    indices_summary += f"<h4 style='margin-top:1em;'>📅 {date}</h4><ul style='list-style:none;padding-left:0;'>"
+                    for item in date_groups[date]:
+                        icon_class = fa_icons.get(item["type"], "fa-circle-info")
+                        level = item["category"]
+                        level_color = level_colors.get(level, "#607D8B")
+                        indices_summary += f'''
+                        <li style="margin-bottom:6px;">
+                            <i class="fas {icon_class}" style="margin-right:8px;color:{level_color};"></i>
+                            <b>{item["name"]}</b>（<span style="color:{level_color};font-weight:bold;">{level}</span>）：
+                            {item["text"]}
+                        </li>
+                        '''
+                    indices_summary += "</ul>"
+                indices_summary += "</div>"
+
+            except Exception as e:
+                indices_summary = f"<div>指数请求错误：{str(e)}</div>"
+
+
+            # 地图显示
+            try:
+                static_map_url = f"https://restapi.amap.com/v3/staticmap?key={AMAP_API_KEY}&location={lng},{lat}&zoom=10&size=600*400&markers=mid,,A:{lng},{lat}"
+                map_resp = requests.get(static_map_url)
+                if map_resp.status_code == 200:
+                    map_img = Image.open(io.BytesIO(map_resp.content))
+                    map_caption = f"{detail} 地图"
+                else:
+                    map_img = None
+                    map_caption = f"地图加载失败：{map_resp.status_code}"
+            except Exception as e:
+                map_img = None
+                map_caption = f"地图加载错误：{str(e)}"
+
+            return icon_html, weather_summary, indices_summary, map_img, map_caption
+
+        weather_btn.click(
+            fn=query_weather_full,
+            inputs=[query_place],
+            outputs=[icon_html_output, weather_output, indices_output, map_image_output, map_caption_output]
         )
-        
-        clear_text_btn.click(
-            fn=clear_route_planning,
+
+        clear_weather_btn.click(
+            fn=lambda: ["", "", "", None, ""],
             inputs=[],
-            outputs=[text_input, map_display, result_text]
+            outputs=[icon_html_output, weather_output, indices_output, map_image_output, map_caption_output]
         )
+
+
+
+
+
+
 
 if __name__ == "__main__":
     demo.launch()
