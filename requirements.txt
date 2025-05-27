@@ -7,3 +7,4 @@ pillow
 pydub
 pandas
 flask
+plotly
