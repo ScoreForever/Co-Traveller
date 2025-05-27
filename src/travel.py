@@ -494,9 +494,13 @@ def speech_to_text(audio_path, api_key=None):
     API_KEY = BAIDU_API_KEY
     SECRET_KEY = BAIDU_SECRET_KEY
 
+    # 确保temp目录存在
+    temp_dir = Path("../temp")
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    wav_path = temp_dir / "temp.wav"
+
     audio = AudioSegment.from_file(audio_path)
-    wav_path = "temp.wav"
-    audio.export(wav_path, format="wav")
+    audio.export(str(wav_path), format="wav")
 
     with open(wav_path, "rb") as f:
         speech_data = f.read()
@@ -554,8 +558,8 @@ def save_travel_plan(place1, date1, place2, date2, ticket_link, travel_plan_data
     if not filename:
         filename = f"{place1}_{place2}_{date1.replace('-', '')}.json"
     
-    save_dir = Path("./travel_plans")
-    save_dir.mkdir(exist_ok=True)
+    save_dir = Path("../temp/travel_plans")
+    save_dir.mkdir(parents=True, exist_ok=True)
     
     file_path = save_dir / filename
     
@@ -601,8 +605,8 @@ def summarize_travel_plan(plan_data):
 
 def list_saved_plans():
     """列出所有保存的旅行计划"""
-    save_dir = Path("./travel_plans")
-    save_dir.mkdir(exist_ok=True)
+    save_dir = Path("../temp/travel_plans")
+    save_dir.mkdir(parents=True, exist_ok=True)
     
     plans = []
     for file in save_dir.glob("*.json"):
@@ -626,7 +630,7 @@ def list_saved_plans():
 
 def load_travel_plan(filename):
     """加载保存的旅行计划"""
-    save_dir = Path("./travel_plans")
+    save_dir = Path("../temp/travel_plans")
     file_path = save_dir / filename
     
     if not file_path.exists():
@@ -653,7 +657,7 @@ def load_travel_plan(filename):
 
 def delete_travel_plan(filename):
     """删除保存的旅行计划"""
-    save_dir = Path("./travel_plans")
+    save_dir = Path("../temp/travel_plans")
     file_path = save_dir / filename
     
     if not file_path.exists():
