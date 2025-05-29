@@ -14,7 +14,6 @@ import json
 from pathlib import Path
 import pandas as pd
 import re
-#新加入的依赖库
 import plotly.graph_objs as go
 from collections import defaultdict
 
@@ -48,6 +47,7 @@ BAIDU_SECRET_KEY = env_vars.get("BAIDU_SECRET_KEY", "")
 BAIDU_APP_ID = env_vars.get("BAIDU_APP_ID", "")
 
 SILICON_API_KEY = env_vars.get("SILICON_API_KEY", "")
+X_QW_API_KEY = env_vars.get("X_QW_API_KEY", "")
 
 def is_valid_date(date_str):
     """验证日期是否为YYYY-MM-DD格式且在当日或之后"""
