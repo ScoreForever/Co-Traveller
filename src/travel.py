@@ -16,6 +16,9 @@ import pandas as pd
 import re
 import plotly.graph_objs as go
 from collections import defaultdict
+# 高德功能文件amap.py引入
+import amap  # 假设amap.py在同一目录下，包含高德地图相关功能
+from amap import geocode_address, calculate_route, generate_map_html
 
 
 def load_env(filepath):
@@ -40,6 +43,7 @@ env_vars = load_env(env_path)
 AMAP_API_KEY = env_vars.get("AMAP_API_KEY")
 if not AMAP_API_KEY:
     raise RuntimeError("API.env 文件中缺少 AMAP_API_KEY 配置项")
+amap.set_amap_api_key(AMAP_API_KEY)
 
 # 百度语音API配置（从API.env读取）
 BAIDU_API_KEY = env_vars.get("BAIDU_API_KEY", "")
@@ -57,6 +61,19 @@ def is_valid_date(date_str):
         return input_date >= today
     except ValueError:
         return False
+    
+def check_same_city(addresses):
+    """检查所有地址是否在同一个市"""
+    city_set = set()
+    for address in addresses:
+        _, _, formatted_address = geocode_address(address)
+        if formatted_address:
+            # 提取市的名称
+            match = re.search(r'([^省市]+市)', formatted_address)
+            if match:
+                city = match.group(1)
+                city_set.add(city)
+    return len(city_set) == 1
 
 def generate_travel_plan(place1, date1, place2, date2):
     """生成查票网址和旅行规划"""
@@ -158,9 +175,12 @@ def generate_travel_plan_multi(place1, date1, dests, date2):
         evening_activities = ["体验夜景", "品尝特色晚餐"]
         cur_date = dep_date
         day_idx = 1
+        # 收集所有景点名称（修复：定义并填充 all_attractions）
+        all_attractions = []
         for i, dest in enumerate(dests):
             stay_days = days_per_dest + (1 if i < extra_days else 0)
             attractions = [f"{dest}景点{j}" for j in range(1, 4)]
+            all_attractions.extend(attractions)
             for _ in range(stay_days):
                 # 上午活动
                 activity_time = "上午"
@@ -189,51 +209,121 @@ def generate_travel_plan_multi(place1, date1, dests, date2):
         ticket_link = f'<a href="{ticket_url}" target="_blank">点击查看票务信息</a>'
         headers = ["日期", "时间", "地点", "活动", "交通"]
         travel_plan_data = pd.DataFrame(travel_plan_data, columns=headers)
-        return ticket_link, travel_plan_data
+        # 使用 amap.py 中的函数处理地址和生成地图
+        
+        # 提取景点中的地址信息
+        addresses = []
+        for attraction in all_attractions:
+            addr = amap.extract_addresses_from_text(attraction)
+            if addr:
+                addresses.append(addr[0])
+
+        if not addresses:
+            return ticket_link, travel_plan_data, "未找到有效地址，无法生成地图"
+
+        # 检查所有地址是否在同一个市
+        if not check_same_city(addresses):
+            return ticket_link, travel_plan_data, "景点不在同一个市，请重新选择目的地"
+
+        # 使用大模型处理景点名称
+        user_text = f"请为以下景点生成详细的行程规划：{', '.join(all_attractions)}"
+        messages = [
+            {"role": "system", "content": "你是一个专业的中文旅行规划助手，善于为用户自动推荐景点并生成详细行程。"},
+            {"role": "user", "content": user_text}
+        ]
+        response = get_chat_response(messages)
+
+        # 尝试解析回复为JSON
+        try:
+            # 只提取第一个JSON数组
+            json_start = response.find('[')
+            json_end = response.rfind(']')
+            if json_start != -1 and json_end != -1:
+                plan_list = json.loads(response[json_start:json_end + 1])
+            else:
+                plan_list = []
+        except Exception as e:
+            plan_list = []
+            print(f"解析大模型回复为JSON失败: {e}")
+
+        # 保证输出协议：所有键为英文且顺序为date, time, location, activity, transport
+        def normalize_item(item):
+            key_map = {
+                "日期": "date",
+                "date": "date",
+                "时间": "time",
+                "time": "time",
+                "地点": "location",
+                "location": "location",
+                "活动": "activity",
+                "activity": "activity",
+                "交通": "transport",
+                "transport": "transport"
+            }
+            return {
+                "date": item.get("date") or item.get("日期", ""),
+                "time": item.get("time") or item.get("时间", ""),
+                "location": item.get("location") or item.get("地点", ""),
+                "activity": item.get("activity") or item.get("活动", ""),
+                "transport": item.get("transport") or item.get("交通", "")
+            }
+
+        normalized_plan = [normalize_item(i) for i in plan_list if isinstance(i, dict)]
+
+        # 获取地址的经纬度
+        locations = []
+        for address in addresses:
+            lng, lat, formatted_address = geocode_address(address)
+            if lng and lat:
+                locations.append((lng, lat, formatted_address))
+
+        if not locations:
+            return ticket_link, travel_plan_data, "所有地址都无法转换为有效坐标，无法生成地图"
+
+        # 计算路线
+        routes = []
+        for i in range(len(locations) - 1):
+            start_lng, start_lat, _ = locations[i]
+            end_lng, end_lat, _ = locations[i + 1]
+            route = calculate_route(start_lng, start_lat, end_lng, end_lat)
+            if route.get("success"):
+                routes.append(route)
+
+        # 生成地图HTML
+        map_html = generate_map_html(locations, routes)
+
+        return ticket_link, travel_plan_data, map_html
+
+    except ValueError:
+        return "日期格式错误，请使用YYYY-MM-DD格式", "请检查输入"
     except Exception as e:
         return f"发生错误: {str(e)}", "无法生成旅行规划"
+
 
 # 高德地图相关功能
 def search_poi(keyword):
     """使用高德POI搜索API将关键词转换为地址，增强景点识别能力"""
-    url = "https://restapi.amap.com/v3/place/text"
-    params = {
-        "key": AMAP_API_KEY,
-        "keywords": keyword,
-        "output": "json",
-        "offset": 5,  # 获取多个结果
-        "extensions": "all"  # 获取详细信息
-    }
-    try:
-        response = requests.get(url, params=params)
-        data = response.json()
-        if data["status"] == "1" and data["pois"]:
-            # 优先选择景点、风景名胜等类型
-            poi_priorities = ['风景名胜', '旅游景点', '公园广场', '博物馆', '文化场馆', '商务住宅', '地名地址']
-            
-            for priority_type in poi_priorities:
-                for poi in data["pois"]:
-                    if priority_type in poi.get("type", ""):
-                        address = poi.get("address", "")
-                        name = poi.get("name", "")
-                        # 返回更详细的地址信息
-                        if address and address != "[]":
-                            return f"{address}{name}" if name not in address else address
-                        else:
-                            return name
-            
-            # 如果没有匹配到优先类型，返回第一个结果
-            poi = data["pois"][0]
-            address = poi.get("address", "")
-            name = poi.get("name", "")
-            if address and address != "[]":
-                return f"{address}{name}" if name not in address else address
-            else:
-                return name
-        return None
-    except Exception as e:
-        print(f"POI搜索失败: {e}")
-        return None
+    return amap.search_poi(keyword)  # 改动：调用 amap 模块中的 search_poi 函数
+
+# 改动：添加新的函数，用于处理路线规划输入
+def process_route_planning(text):
+    addresses = amap.extract_addresses_from_text(text)
+    locations = []
+    routes = []
+    for address in addresses:
+        lng, lat, addr = amap.geocode_address(address)
+        if lng and lat:
+            locations.append((lng, lat, addr))
+    if len(locations) > 1:
+        for i in range(len(locations) - 1):
+            start_lng, start_lat, _ = locations[i]
+            end_lng, end_lat, _ = locations[i + 1]
+            route = amap.calculate_route(start_lng, start_lat, end_lng, end_lat)
+            if route["success"]:
+                routes.append(route)
+    map_html = amap.generate_map_html(locations, routes)
+    return map_html
+
 
 def extract_addresses_from_text(text):
     """从文本中提取地址信息，支持景点名称和各种地址格式"""
@@ -315,110 +405,6 @@ def extract_addresses_from_text(text):
     
     return list(set(verified_addresses))  # 去重返回
 
-def geocode_address(address):
-    """使用高德地图API将地址转换为经纬度"""
-    url = "https://restapi.amap.com/v3/geocode/geo"
-    params = {
-        "key": AMAP_API_KEY,
-        "address": address,
-        "output": "json"
-    }
-    
-    try:
-        response = requests.get(url, params=params)
-        data = response.json()
-        
-        if data["status"] == "1" and data["geocodes"]:
-            location = data["geocodes"][0]["location"]
-            lng, lat = location.split(",")
-            return float(lng), float(lat), data["geocodes"][0]["formatted_address"]
-        else:
-            return None, None, f"无法解析地址: {address}"
-    except Exception as e:
-        return None, None, f"地址解析错误: {str(e)}"
-
-def calculate_route(start_lng, start_lat, end_lng, end_lat):
-    """使用高德地图API计算路线"""
-    url = "https://restapi.amap.com/v3/direction/driving"
-    params = {
-        "key": AMAP_API_KEY,
-        "origin": f"{start_lng},{start_lat}",
-        "destination": f"{end_lng},{end_lat}",
-        "output": "json",
-        "extensions": "all"
-    }
-    
-    try:
-        response = requests.get(url, params=params)
-        data = response.json()
-        
-        if data["status"] == "1" and data["route"]["paths"]:
-            path = data["route"]["paths"][0]
-            polyline = path["steps"][0]["polyline"] if path["steps"] else ""
-            distance = path["distance"]
-            duration = path["duration"]
-            
-            return {
-                "polyline": polyline,
-                "distance": distance,
-                "duration": duration,
-                "success": True
-            }
-        else:
-            return {"success": False, "error": "路线规划失败"}
-    except Exception as e:
-        return {"success": False, "error": f"路线规划错误: {str(e)}"}
-
-def generate_map_html(locations, routes=None):
-    """生成包含标注点、路线和交互式弹窗的高德地图HTML"""
-    if not locations:
-        return "未找到有效地址"
-    
-    center_lng = sum([loc[0] for loc in locations if loc[0]]) / len([loc for loc in locations if loc[0]])
-    center_lat = sum([loc[1] for loc in locations if loc[1]]) / len([loc for loc in locations if loc[1]])
-    
-    html_content = f"""
-    <div id="mapContainer" style="width: 100%; height: 400px;"></div>
-    <script src="https://webapi.amap.com/maps?v=1.4.15&key={AMAP_API_KEY}"></script>
-    <script>
-        var map = new AMap.Map('mapContainer', {{
-            center: [{center_lng}, {center_lat}],
-            zoom: 10
-        }});
-    """
-    
-    for lng, lat, addr in locations:
-        html_content += f"""
-        var marker = new AMap.Marker({{
-            position: [{lng}, {lat}],
-            map: map,
-            title: '{addr}'
-        }});
-        var infoWindow = new AMap.InfoWindow({{
-            content: '<div><h4>{addr}</h4><p>点击查看详情</p></div>',
-            offset: new AMap.Pixel(0, -30)
-        }});
-        marker.on('click', function() {{
-            infoWindow.open(map, marker.getPosition());
-        }});
-        """
-    
-    if routes:
-        for route in routes:
-            if route.get("success"):
-                points = route["polyline"].split(';')
-                path = [[float(p.split(',')[0]), float(p.split(',')[1])] for p in points]
-                html_content += f"""
-                var polyline = new AMap.Polyline({{
-                    path: {path},
-                    strokeColor: "#3366FF",
-                    strokeWeight: 5,
-                    map: map
-                }});
-                """
-    
-    html_content += "</script>"
-    return html_content
 
 def process_text_to_map(text):
     """处理文本，提取地址并生成地图"""
@@ -433,9 +419,9 @@ def process_text_to_map(text):
     geocode_results = []
     
     for addr in addresses:
-        lng, lat, formatted_addr = geocode_address(addr)
+        lng, lat, formatted_addr, address_info = geocode_address(addr)
         if lng and lat:
-            locations.append((lng, lat, formatted_addr))
+            locations.append((lng, lat, formatted_addr, address_info))
             geocode_results.append(f"✅ {addr} → {formatted_addr}")
         else:
             geocode_results.append(f"❌ {addr} → {formatted_addr}")
@@ -827,7 +813,7 @@ with gr.Blocks() as demo:
             outputs=[chat_state, chatbot]
         )
 
-    with gr.Tab("城市景点地图"):    
+    '''with gr.Tab("城市景点地图"):    
         gr.Markdown("### 🌍 城市景点地图")
     
         with gr.Row():
@@ -855,6 +841,139 @@ with gr.Blocks() as demo:
             fn=lambda: [None, None, None],
             inputs=[],
             outputs=[place, date, map_image]
+        )'''
+    # 新增：路线规划标签页
+    
+    with gr.Tab("🗺️ 路线规划"):
+        gr.Markdown("### 输入景点名称或地址，生成路线规划地图")
+        
+        with gr.Row():
+            with gr.Column(scale=1):
+                gr.Markdown("#### 输入选项")
+                
+                with gr.Row():
+                    place_input = gr.Textbox(
+                        label="景点/地址", 
+                        placeholder="例如：北京故宫,八达岭长城,颐和园",
+                        info="多个景点请用逗号分隔"
+                    )
+                    
+                    transport_type = gr.Radio(
+                        choices=["驾车", "公交", "步行", "骑行"],
+                        value="驾车",
+                        label="交通方式",
+                        info="选择主要交通方式"
+                    )
+                
+                with gr.Row():
+                    optimize_route = gr.Checkbox(
+                        value=True,
+                        label="优化路线顺序",
+                        info="根据距离自动优化景点游览顺序"
+                    )
+                    
+                    show_details = gr.Checkbox(
+                        value=True,
+                        label="显示详细路线",
+                        info="在地图上显示详细路线和距离"
+                    )
+                
+                generate_btn = gr.Button("生成路线地图", variant="primary")
+                clear_btn = gr.Button("清除")
+            
+            with gr.Column(scale=2):
+                gr.Markdown("#### 地图展示")
+                map_output = gr.HTML(label="路线地图")
+                
+        with gr.Row():
+            route_info = gr.Textbox(
+                label="路线信息",
+                lines=10,
+                interactive=False,
+                info="显示景点顺序和路线详情"
+            )
+            
+        def generate_route_map(places_str, transport, optimize, show_details):
+            """生成路线地图和路线信息"""
+            if not places_str.strip():
+                return "请输入景点或地址", "请输入景点或地址"
+            
+            # 解析景点列表
+            places = [p.strip() for p in places_str.split('，') if p.strip()]
+            if len(places) < 2:
+                return "请至少输入两个景点或地址", "请至少输入两个景点或地址"
+            
+            # 获取景点经纬度
+            locations = []
+            valid_places = []
+            invalid_places = []
+            
+            for place in places:
+                lng, lat, formatted_addr, address_info = amap.geocode_address(place)  # 修改这里
+                if lng and lat:
+                    locations.append((lng, lat, formatted_addr, address_info))  # 修改这里
+                    valid_places.append(formatted_addr)
+                else:
+                    invalid_places.append(place)
+            
+            if not locations:
+                return "无法解析任何地址", "无法解析任何地址"
+            
+            # 生成路线信息文本
+            route_text = "路线规划结果:\n\n"
+            if invalid_places:
+                route_text += f"⚠️ 无法解析以下地址: {', '.join(invalid_places)}\n\n"
+            
+            route_text += "✅ 有效景点:\n"
+            for i, place in enumerate(valid_places):
+                route_text += f"{i+1}. {place}\n"
+            
+            # 计算路线
+            routes = []
+            if len(locations) > 1:
+                for i in range(len(locations) - 1):
+                    start_lng, start_lat, _, _ = locations[i]  # 修改这里
+                    end_lng, end_lat, _, _ = locations[i + 1]  # 修改这里
+                    
+                    # 根据选择的交通方式调用不同的路线规划API
+                    route = amap.calculate_route(
+                        start_lng, start_lat, end_lng, end_lat,
+                        transport_mode=transport.lower()  # 传递交通方式参数
+                    )
+                    
+                    if route["success"]:
+                        routes.append(route)
+                        
+                        # 提取路线详情
+                        distance = float(route["distance"]) / 1000  # 转换为公里
+                        duration = int(route["duration"]) // 60  # 转换为分钟
+                        
+                        route_text += f"\n🚗 从 {valid_places[i]} 到 {valid_places[i+1]}:"
+                        route_text += f"\n   • 距离: {distance:.2f} 公里"
+                        route_text += f"\n   • 预计时间: {duration} 分钟"
+                        route_text += f"\n   • 交通方式: {transport}"
+            
+            # 生成美化后的地图（添加自定义图标和样式）
+            map_html = amap.generate_route_map(
+                locations, 
+                routes,
+                transport_mode=transport,
+                show_details=show_details,
+                optimize_route=optimize
+            )
+            
+            return map_html, route_text
+        # 设置事件处理
+        generate_btn.click(
+            fn=generate_route_map,
+            inputs=[place_input, transport_type, optimize_route, show_details],
+            outputs=[map_output, route_info]
+        )
+        
+        clear_btn.click(
+            fn=lambda: [None, None, None, None, None, None],
+            inputs=[],
+            outputs=[place_input, transport_type, optimize_route, show_details, map_output, route_info]
         )
 
     with gr.Tab("🌦️ 地点天气查询"):
@@ -1026,3 +1145,108 @@ with gr.Blocks() as demo:
 
 if __name__ == "__main__":
     demo.launch()
+'''
+def geocode_address(address):
+    """使用高德地图API将地址转换为经纬度"""
+    url = "https://restapi.amap.com/v3/geocode/geo"
+    params = {
+        "key": AMAP_API_KEY,
+        "address": address,
+        "output": "json"
+    }
+    
+    try:
+        response = requests.get(url, params=params)
+        data = response.json()
+        
+        if data["status"] == "1" and data["geocodes"]:
+            location = data["geocodes"][0]["location"]
+            lng, lat = location.split(",")
+            return float(lng), float(lat), data["geocodes"][0]["formatted_address"]
+        else:
+            return None, None, f"无法解析地址: {address}"
+    except Exception as e:
+        return None, None, f"地址解析错误: {str(e)}"
+
+def calculate_route(start_lng, start_lat, end_lng, end_lat):
+    """使用高德地图API计算路线"""
+    url = "https://restapi.amap.com/v3/direction/driving"
+    params = {
+        "key": AMAP_API_KEY,
+        "origin": f"{start_lng},{start_lat}",
+        "destination": f"{end_lng},{end_lat}",
+        "output": "json",
+        "extensions": "all"
+    }
+    
+    try:
+        response = requests.get(url, params=params)
+        data = response.json()
+        
+        if data["status"] == "1" and data["route"]["paths"]:
+            path = data["route"]["paths"][0]
+            polyline = path["steps"][0]["polyline"] if path["steps"] else ""
+            distance = path["distance"]
+            duration = path["duration"]
+            
+            return {
+                "polyline": polyline,
+                "distance": distance,
+                "duration": duration,
+                "success": True
+            }
+        else:
+            return {"success": False, "error": "路线规划失败"}
+    except Exception as e:
+        return {"success": False, "error": f"路线规划错误: {str(e)}"}
+
+def generate_map_html(locations, routes=None):
+    """生成包含标注点、路线和交互式弹窗的高德地图HTML"""
+    if not locations:
+        return "未找到有效地址"
+    
+    center_lng = sum([loc[0] for loc in locations if loc[0]]) / len([loc for loc in locations if loc[0]])
+    center_lat = sum([loc[1] for loc in locations if loc[1]]) / len([loc for loc in locations if loc[1]])
+    
+    html_content = f"""
+    <div id="mapContainer" style="width: 100%; height: 400px;"></div>
+    <script src="https://webapi.amap.com/maps?v=1.4.15&key={AMAP_API_KEY}"></script>
+    <script>
+        var map = new AMap.Map('mapContainer', {{
+            center: [{center_lng}, {center_lat}],
+            zoom: 10
+        }});
+    """
+    
+    for lng, lat, addr in locations:
+        html_content += f"""
+        var marker = new AMap.Marker({{
+            position: [{lng}, {lat}],
+            map: map,
+            title: '{addr}'
+        }});
+        var infoWindow = new AMap.InfoWindow({{
+            content: '<div><h4>{addr}</h4><p>点击查看详情</p></div>',
+            offset: new AMap.Pixel(0, -30)
+        }});
+        marker.on('click', function() {{
+            infoWindow.open(map, marker.getPosition());
+        }});
+        """
+    
+    if routes:
+        for route in routes:
+            if route.get("success"):
+                points = route["polyline"].split(';')
+                path = [[float(p.split(',')[0]), float(p.split(',')[1])] for p in points]
+                html_content += f"""
+                var polyline = new AMap.Polyline({{
+                    path: {path},
+                    strokeColor: "#3366FF",
+                    strokeWeight: 5,
+                    map: map
+                }});
+                """
+    
+    html_content += "</script>"
+    return html_content'''
