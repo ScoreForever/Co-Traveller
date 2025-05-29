@@ -19,12 +19,35 @@ import plotly.graph_objs as go
 from collections import defaultdict
 
 
-# 依赖库：请确保已安装以下库
-# pip install gradio requests pillow pydub pandas plotly
+def load_env(filepath):
+    """从.env文件读取环境变量"""
+    env = {}
+    if os.path.exists(filepath):
+        with open(filepath, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    env[k.strip()] = v.strip()
+    return env
 
-# 高德地图 API 密钥（请替换为有效的密钥）
-AMAP_API_KEY = "27c0337b84e44bb373bb2724a6ea157d"  # 请替换为您的实际高德地图 API 密钥
-X_QW_API_KEY = "ace2a22669b549af8a5e9339f4594937"  # 请替换为您的实际和风天气 API 密钥
+# 读取API.env
+env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "API.env")
+env_vars = load_env(env_path)
+
+# 高德地图 API 密钥（从API.env读取）
+AMAP_API_KEY = env_vars.get("AMAP_API_KEY")
+if not AMAP_API_KEY:
+    raise RuntimeError("API.env 文件中缺少 AMAP_API_KEY 配置项")
+
+# 百度语音API配置（从API.env读取）
+BAIDU_API_KEY = env_vars.get("BAIDU_API_KEY", "")
+BAIDU_SECRET_KEY = env_vars.get("BAIDU_SECRET_KEY", "")
+BAIDU_APP_ID = env_vars.get("BAIDU_APP_ID", "")
+
+SILICON_API_KEY = env_vars.get("SILICON_API_KEY", "")
 
 def is_valid_date(date_str):
     """验证日期是否为YYYY-MM-DD格式且在当日或之后"""
@@ -69,29 +92,29 @@ def generate_travel_plan(place1, date1, place2, date2):
         morning_activities = ["参观", "品尝当地早餐", "参加文化体验活动"]
         afternoon_activities = ["游览", "购物"]
         evening_activities = ["体验夜景", "品尝特色晚餐"]
-        
-        for day in range(1, days + 1):
+
+        for i in range(days):
+            cur_date = dep_date + timedelta(days=i)
             # 上午活动
             activity_time = "上午"
             activity_place = random.choice(attractions)
             activity_action = random.choice(morning_activities)
             activity_transport = random.choice(["公交", "地铁", "步行", "出租车"])
-            travel_plan_data.append([f"Day{day}", activity_time, activity_place, activity_action, activity_transport])
-            
+            travel_plan_data.append([f"Day{i+1}（{cur_date.strftime('%Y-%m-%d')}）", activity_time, activity_place, activity_action, activity_transport])
+
             # 下午活动
             activity_time = "下午"
             activity_place = random.choice(attractions)
             activity_action = random.choice(afternoon_activities)
             activity_transport = random.choice(["公交", "地铁", "步行", "出租车"])
-            travel_plan_data.append([f"Day{day}", activity_time, activity_place, activity_action, activity_transport])
-            
-            # 晚上活动（除最后一天）
-            if day < days:
-                activity_time = "晚上"
-                activity_place = random.choice(attractions)
-                activity_action = random.choice(evening_activities)
-                activity_transport = random.choice(["公交", "地铁", "步行", "出租车"])
-                travel_plan_data.append([f"Day{day}", activity_time, activity_place, activity_action, activity_transport])
+            travel_plan_data.append([f"Day{i+1}（{cur_date.strftime('%Y-%m-%d')}）", activity_time, activity_place, activity_action, activity_transport])
+
+            # 晚上活动
+            activity_time = "晚上"
+            activity_place = random.choice(attractions)
+            activity_action = random.choice(evening_activities)
+            activity_transport = random.choice(["公交", "地铁", "步行", "出租车"])
+            travel_plan_data.append([f"Day{i+1}（{cur_date.strftime('%Y-%m-%d')}）", activity_time, activity_place, activity_action, activity_transport])
         
         # 将列表转换为DataFrame
         headers = ["日期", "时间", "地点", "活动", "交通"]
@@ -101,6 +124,72 @@ def generate_travel_plan(place1, date1, place2, date2):
     
     except ValueError:
         return "日期格式错误，请使用YYYY-MM-DD格式", "请检查输入"
+    except Exception as e:
+        return f"发生错误: {str(e)}", "无法生成旅行规划"
+
+# 新增：支持多目的地和多日期的行程规划
+def generate_travel_plan_multi(place1, date1, dests, date2):
+    """
+    place1: 出发地
+    date1: 出发日期
+    dests: 目的地列表
+    date2: 返回日期
+    """
+    try:
+        if not is_valid_date(date1):
+            return "日期格式错误或日期必须在当日或之后", "请检查出发日期"
+        if not is_valid_date(date2):
+            return "日期格式错误或日期必须在当日或之后", "请检查返回日期"
+        if not dests:
+            return "请至少填写一个目的地", "请检查输入"
+        dep_date = datetime.strptime(date1, "%Y-%m-%d").date()
+        ret_date = datetime.strptime(date2, "%Y-%m-%d").date()
+        if ret_date < dep_date:
+            return "返回日期不能早于出发日期", "请检查日期顺序"
+        total_days = (ret_date - dep_date).days + 1
+        if total_days > 30:
+            return "旅游时间过长，建议不超过30天", "请缩短旅行日期"
+        # 均分天数给每个目的地
+        days_per_dest = total_days // len(dests)
+        extra_days = total_days % len(dests)
+        travel_plan_data = []
+        morning_activities = ["参观", "品尝当地早餐", "参加文化体验活动"]
+        afternoon_activities = ["游览", "购物"]
+        evening_activities = ["体验夜景", "品尝特色晚餐"]
+        cur_date = dep_date
+        day_idx = 1
+        for i, dest in enumerate(dests):
+            stay_days = days_per_dest + (1 if i < extra_days else 0)
+            attractions = [f"{dest}景点{j}" for j in range(1, 4)]
+            for _ in range(stay_days):
+                # 上午活动
+                activity_time = "上午"
+                activity_place = random.choice(attractions)
+                activity_action = random.choice(morning_activities)
+                activity_transport = random.choice(["公交", "地铁", "步行", "出租车"])
+                travel_plan_data.append([f"Day{day_idx}（{cur_date.strftime('%Y-%m-%d')}）", activity_time, activity_place, activity_action, activity_transport])
+
+                # 下午活动
+                activity_time = "下午"
+                activity_place = random.choice(attractions)
+                activity_action = random.choice(afternoon_activities)
+                activity_transport = random.choice(["公交", "地铁", "步行", "出租车"])
+                travel_plan_data.append([f"Day{day_idx}（{cur_date.strftime('%Y-%m-%d')}）", activity_time, activity_place, activity_action, activity_transport])
+
+                # 晚上活动
+                activity_time = "晚上"
+                activity_place = random.choice(attractions)
+                activity_action = random.choice(evening_activities)
+                activity_transport = random.choice(["公交", "地铁", "步行", "出租车"])
+                travel_plan_data.append([f"Day{day_idx}（{cur_date.strftime('%Y-%m-%d')}）", activity_time, activity_place, activity_action, activity_transport])
+
+                cur_date += timedelta(days=1)
+                day_idx += 1
+        ticket_url = f"https://flights.ctrip.com/international/search/round-{place1}-{dests[0]}-{date1}-{date2}"
+        ticket_link = f'<a href="{ticket_url}" target="_blank">点击查看票务信息</a>'
+        headers = ["日期", "时间", "地点", "活动", "交通"]
+        travel_plan_data = pd.DataFrame(travel_plan_data, columns=headers)
+        return ticket_link, travel_plan_data
     except Exception as e:
         return f"发生错误: {str(e)}", "无法生成旅行规划"
 
@@ -402,16 +491,20 @@ def generate_city_map(place, date):
         print(f"获取地图失败: {e}")
         return None, "加载地图失败"
 
-def speech_to_text(audio_path, api_key):
+def speech_to_text(audio_path, api_key=None):
     """调用语音转文字API（示例使用百度语音识别）"""
     API_URL = "https://vop.baidu.com/server_api"
-    APP_ID = "YOUR_APP_ID"  # 请替换
-    API_KEY = api_key
-    SECRET_KEY = "YOUR_SECRET_KEY"  # 请替换
+    APP_ID = BAIDU_APP_ID
+    API_KEY = BAIDU_API_KEY
+    SECRET_KEY = BAIDU_SECRET_KEY
+
+    # 确保temp目录存在
+    temp_dir = Path("../temp")
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    wav_path = temp_dir / "temp.wav"
 
     audio = AudioSegment.from_file(audio_path)
-    wav_path = "temp.wav"
-    audio.export(wav_path, format="wav")
+    audio.export(str(wav_path), format="wav")
 
     with open(wav_path, "rb") as f:
         speech_data = f.read()
@@ -434,15 +527,21 @@ def speech_to_text(audio_path, api_key):
     else:
         return "语音识别失败，请重试"
 
-def get_access_token(api_key, secret_key):
+def get_access_token(api_key=None, secret_key=None):
     """获取百度语音API访问令牌"""
+    if not api_key:
+        api_key = BAIDU_API_KEY
+    if not secret_key:
+        secret_key = BAIDU_SECRET_KEY
     token_url = f"https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id={api_key}&client_secret={secret_key}"
     response = requests.get(token_url)
     return response.json()["access_token"]
 
 def chat_with_agent(text, chat_history):
     """模拟智能体对话（需替换为真实LLM API）"""
-    api_key = "YOUR_OPENAI_API_KEY"  # 请替换
+    api_key = SILICON_API_KEY  # 使用SILICON_API_KEY
+    if not api_key:
+        return "未配置SILICON_API_KEY", chat_history
     headers = {"Authorization": f"Bearer {api_key}"}
     payload = {
         "model": "gpt-3.5-turbo",
@@ -463,8 +562,8 @@ def save_travel_plan(place1, date1, place2, date2, ticket_link, travel_plan_data
     if not filename:
         filename = f"{place1}_{place2}_{date1.replace('-', '')}.json"
     
-    save_dir = Path("./travel_plans")
-    save_dir.mkdir(exist_ok=True)
+    save_dir = Path("../temp/travel_plans")
+    save_dir.mkdir(parents=True, exist_ok=True)
     
     file_path = save_dir / filename
     
@@ -510,8 +609,8 @@ def summarize_travel_plan(plan_data):
 
 def list_saved_plans():
     """列出所有保存的旅行计划"""
-    save_dir = Path("./travel_plans")
-    save_dir.mkdir(exist_ok=True)
+    save_dir = Path("../temp/travel_plans")
+    save_dir.mkdir(parents=True, exist_ok=True)
     
     plans = []
     for file in save_dir.glob("*.json"):
@@ -535,7 +634,7 @@ def list_saved_plans():
 
 def load_travel_plan(filename):
     """加载保存的旅行计划"""
-    save_dir = Path("./travel_plans")
+    save_dir = Path("../temp/travel_plans")
     file_path = save_dir / filename
     
     if not file_path.exists():
@@ -562,7 +661,7 @@ def load_travel_plan(filename):
 
 def delete_travel_plan(filename):
     """删除保存的旅行计划"""
-    save_dir = Path("./travel_plans")
+    save_dir = Path("../temp/travel_plans")
     file_path = save_dir / filename
     
     if not file_path.exists():
@@ -577,17 +676,26 @@ def delete_travel_plan(filename):
 # 创建界面
 with gr.Blocks() as demo:
     gr.Markdown("# 🧳 旅行助手")
-    
     with gr.Tab("查票与行程规划"):
-        gr.Markdown("### 输入出发地、目的地和日期，获取查票链接和旅行建议")
+        gr.Markdown("### 输入出发地、多个目的地和返程日期，获取查票链接和旅行建议")
         with gr.Row():
             with gr.Column():
                 place1 = gr.Textbox(label="出发地", placeholder="例如：北京")
                 date1 = gr.Textbox(label="出发日期", placeholder="YYYY-MM-DD")
             with gr.Column():
-                place2 = gr.Textbox(label="目的地", placeholder="例如：上海")
-                date2 = gr.Textbox(label="返回日期", placeholder="YYYY-MM-DD")
-        
+                MAX_INPUTS = 20
+                current_index = gr.State(0)
+                dest_inputs = []
+                for i in range(MAX_INPUTS):
+                    visible = i == 0
+                    tb = gr.Textbox(
+                        label=f"目的地 {i+1}",
+                        placeholder="例如：上海",
+                        visible=visible,
+                        interactive=True
+                    )
+                    dest_inputs.append(tb)
+                date2 = gr.Textbox(label="返回日期", placeholder="YYYY-MM-DD")  # 新增返程日期输入框
         with gr.Row():
             clear_btn = gr.Button("清除")
             submit_btn = gr.Button("提交", variant="primary")
@@ -617,42 +725,62 @@ with gr.Blocks() as demo:
             with gr.Column(scale=2):
                 file_selector = gr.Dropdown(choices=[], label="选择已保存的计划")
         
-        def update_travel_plan(place1, date1, place2, date2):
-            ticket_link, plan = generate_travel_plan(place1, date1, place2, date2)
-            return ticket_link, plan
-        
+        # 动态显示下一个目的地和日期输入框
+        def show_next_dest(text, index):
+            if text.strip() and index < MAX_INPUTS - 1:
+                return {
+                    current_index: index + 1,
+                    dest_inputs[index + 1]: gr.Textbox(visible=True),
+                }
+            return {current_index: index}
+        for idx in range(MAX_INPUTS - 1):
+            dest_inputs[idx].submit(
+                show_next_dest,
+                inputs=[dest_inputs[idx], current_index],
+                outputs=[current_index, dest_inputs[idx + 1]],
+            )
+
+        # 收集所有已填写的目的地和日期并调用多目的地行程规划
+        def update_travel_plan(place1, date1, *args):
+            dests = []
+            for d in args[:-1]:
+                if d and d.strip():
+                    dests.append(d.strip())
+            date2_val = args[-1]
+            if not dests or not date2_val:
+                return "请至少填写一个目的地和返程日期", None
+            return generate_travel_plan_multi(place1, date1, dests, date2_val)
         submit_btn.click(
             fn=update_travel_plan,
-            inputs=[place1, date1, place2, date2],
+            inputs=[place1, date1] + dest_inputs + [date2],
             outputs=[ticket_url_output, travel_plan_output]
         )
-        
         clear_btn.click(
-            fn=lambda: [None, None, None, None, None, None],
+            fn=lambda: [None, None] + [None]*MAX_INPUTS + [None, None, None],
             inputs=[],
-            outputs=[place1, date1, place2, date2, ticket_url_output, travel_plan_output]
+            outputs=[place1, date1] + dest_inputs + [date2, ticket_url_output, travel_plan_output]
         )
-        
         def update_file_selector():
             plans = list_saved_plans()
             return [plan["filename"] for plan in plans]
         
+        # 保存时只保存第一个目的地和第一个日期
         save_btn.click(
-            fn=lambda p1, d1, p2, d2, url, plan, fn: save_travel_plan(p1, d1, p2, d2, url, plan, fn),
-            inputs=[place1, date1, place2, date2, ticket_url_output, travel_plan_output, filename_input],
+            fn=lambda p1, d1, *args: save_travel_plan(
+                p1, d1, args[0] if args[0] else "", args[-4] if len(args) > 3 else "", args[-3], args[-2], args[-1]
+            ),
+            inputs=[place1, date1] + dest_inputs + [date2, ticket_url_output, travel_plan_output, filename_input],
             outputs=[gr.Textbox(label="保存状态"), saved_plans_output]
         ).then(
             fn=update_file_selector,
             inputs=[],
             outputs=file_selector
         )
-        
         load_btn.click(
             fn=lambda filename: load_travel_plan(filename) if filename else (None, "请先选择一个计划", []),
             inputs=[file_selector],
-            outputs=[place1, date1, place2, date2, ticket_url_output, travel_plan_output]
+            outputs=[place1, date1, dest_inputs[0], ticket_url_output, travel_plan_output]
         )
-        
         delete_btn.click(
             fn=lambda filename: delete_travel_plan(filename) if filename else ("请先选择一个计划", []),
             inputs=[file_selector],
@@ -690,7 +818,7 @@ with gr.Blocks() as demo:
     
         stt_btn.click(
             fn=process_speech,
-            inputs=[audio_input, chat_state, gr.Textbox(visible=False, value="YOUR_BAIDU_API_KEY")],  # 请替换
+            inputs=[audio_input, chat_state, gr.Textbox(visible=False, value=BAIDU_API_KEY)],  # 使用env中的API_KEY
             outputs=[gr.Textbox(visible=False), chatbot]
         )
     

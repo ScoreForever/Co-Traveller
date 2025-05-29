@@ -1,0 +1,1 @@
+pandoc ..\..\temp\tourGuide.md -o ..\..\temp\panTest.pdf --pdf-engine=xelatex -V mainfont="SimSun" -V emoji="Segoe UI Emoji"

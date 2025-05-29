@@ -1,0 +1,9 @@
+markdown
+pdfkit
+dotenv
+gradio
+numpy
+pillow
+pydub
+pandas
+flask
