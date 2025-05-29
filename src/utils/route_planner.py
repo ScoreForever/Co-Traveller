@@ -35,27 +35,28 @@ def get_chat_response(messages, model_name=MODEL_NAME, api_key=API_KEY, api_url=
         return f"Error: {str(e)}"
 
 def main():
-    # 读取GUI输出
-    base_dir = os.path.join(os.path.dirname(__file__), '../../temp')
+    # 读取GUI输出（目录变更）
+    base_dir = os.path.join(os.path.dirname(__file__), '../../temp/travel_plans')
     gui_path = os.path.join(base_dir, "route_planning_GUIoutput.json")
     llm_path = os.path.join(base_dir, "route_planning_LLMoutput.json")
     with open(gui_path, "r", encoding="utf-8") as f:
         gui_data = json.load(f)
 
+    # 新输入协议：departure, departure_date, return_date, destinations:[{"place": ...}, ...]
     departure = gui_data.get("departure", "")
     departure_date = gui_data.get("departure_date", "")
+    return_date = gui_data.get("return_date", "")
     destinations = gui_data.get("destinations", [])
 
-    # 构造用户需求描述
+    # 构造用户需求描述（包含返程日期）
     dest_desc = []
     for dest in destinations:
         place = dest.get("place", "")
-        arrive_date = dest.get("arrive_date", "")
-        dest_desc.append(f"{place}（{arrive_date}到达）")
+        dest_desc.append(f"{place}")
     dest_str = "，".join(dest_desc)
 
     user_text = (
-        f"我将于{departure_date}从{departure}出发，依次前往{dest_str}。"
+        f"我将于{departure_date}从{departure}出发，依次前往{dest_str}，{return_date}返程。"
         "请为每个到达城市自动推荐适合的旅行景点，并为整个行程生成详细的每日行程规划。"
         "请输出一个JSON数组，每个元素包含：date, time, location, activity, transport。"
         "所有键必须为英文，且顺序为date, time, location, activity, transport。"
@@ -108,7 +109,7 @@ def main():
 
     normalized_plan = [normalize_item(i) for i in plan_list if isinstance(i, dict)]
 
-    # 写入LLM输出文件
+    # 写入LLM输出文件（目录变更）
     with open(llm_path, "w", encoding="utf-8") as f:
         json.dump(normalized_plan, f, ensure_ascii=False, indent=2)
     print(f"行程规划已保存至: {llm_path}")
