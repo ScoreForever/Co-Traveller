@@ -241,6 +241,26 @@ def geocode_address(address_info):
         print(f"地址解析错误: {e}")
         return None, None, f"地址解析错误: {str(e)}", address_info
 
+#添加新的函数2
+
+def get_city_code(lng, lat):
+    """根据经纬度获取城市代码"""
+    url = "https://restapi.amap.com/v3/geocode/regeo"
+    params = {
+        "key": AMAP_API_KEY,
+        "location": f"{lng},{lat}",
+        "extensions": "base",
+        "output": "json"
+    }
+    try:
+        response = requests.get(url, params=params)
+        data = response.json()
+        if data["status"] == "1":
+            return data["regeocode"]["addressComponent"]["adcode"]
+    except Exception as e:
+        print(f"获取城市代码失败: {str(e)}")
+    return None
+
 def calculate_route(start_lng, start_lat, end_lng, end_lat, transport_mode="driving"):
     """使用高德地图API计算路线，支持不同交通方式"""
     # 0528最新修改：优化路线计算API调用
@@ -264,9 +284,16 @@ def calculate_route(start_lng, start_lat, end_lng, end_lat, transport_mode="driv
     }
     
     # 0528最新修改：改进公交路线城市推断
+    #修改：城市代码而不是名称1
     if transport_mode == "transit":
-        city = infer_city_from_coordinates(start_lng, start_lat)
-        params["city"] = city or "北京"
+        url = "https://restapi.amap.com/v3/direction/transit/integrated"
+        city_code = get_city_code(start_lng, start_lat)  # 新增函数获取城市代码
+        if city_code:
+            params["city"] = city_code
+            params["cityd"] = get_city_code(end_lng, end_lat) or city_code
+        else:
+            params["city"] = "110000"  # 默认北京
+            params["cityd"] = "110000"
     
     try:
         response = requests.get(url, params=params)
@@ -341,16 +368,26 @@ def infer_city_from_coordinates(lng, lat):
     return "北京"
 
 # 0528最新修改：新增公交路线提取函数
+#0530修改3
 def extract_transit_polyline(transit_path):
-    """从公交路线中提取折线数据"""
+    """从公交路线中提取折线数据（修复版）"""
     polylines = []
+    
+    # 遍历所有换乘段
     for segment in transit_path.get("segments", []):
-        if "walking" in segment:
-            polylines.append(segment["walking"]["polyline"])
-        if "bus" in segment:
-            for busline in segment["bus"]["segments"]:
+        # 步行部分
+        walking = segment.get("walking")
+        if walking and "polyline" in walking:
+            polylines.append(walking["polyline"])
+        
+        # 公交部分
+        bus = segment.get("bus")
+        if bus:
+            buslines = bus.get("buslines", [])
+            for busline in buslines:
                 if "polyline" in busline:
                     polylines.append(busline["polyline"])
+    
     return ";".join(polylines)
 
 def generate_map_html(locations, routes=None):
@@ -463,17 +500,27 @@ def generate_map_html(locations, routes=None):
 
 def generate_route_map(locations, routes, transport_mode, show_details, optimize_route):
     """生成美化后的路线地图，包含自定义标记和路线"""
-    if not locations:
-        return "未找到有效地址"
+    # 过滤无效位置（确保每个位置有经纬度）
+    valid_locations = []
+    for loc in locations:
+        # 确保位置元组有4个元素
+        if len(loc) < 4:
+            print(f"无效位置格式: {loc}")
+            continue
+            
+        lng, lat, addr, info = loc
+        if lng and lat:
+            valid_locations.append((lng, lat, addr, info))
+        else:
+            print(f"无效坐标: {loc}")
     
-    # 0528最新修改：改进中心点和缩放级别计算
-    valid_locations = [(lng, lat, addr, info) for lng, lat, addr, info in locations if lng and lat]
     if not valid_locations:
         return "没有有效的地理坐标"
     
+    # 计算中心点和缩放级别（保持原有代码）
     center_lng = sum([loc[0] for loc in valid_locations]) / len(valid_locations)
     center_lat = sum([loc[1] for loc in valid_locations]) / len(valid_locations)
-    
+    zoom_level = calculate_zoom_level(calculate_max_distance(valid_locations))
     # 计算合适的缩放级别
     if len(valid_locations) == 1:
         zoom_level = 15
@@ -497,6 +544,13 @@ def generate_route_map(locations, routes, transport_mode, show_details, optimize
         "商场": "🏬", "车站": "🚉", "机场": "✈️", "医院": "🏥", "学校": "🏫",
         "银行": "🏦", "教堂": "⛪", "塔": "🗼", "桥": "🌉", "海滩": "🏖️"
     }
+
+    #调试信息4
+
+    if routes and show_details:
+        print(f"找到 {len(routes)} 条路线")  # 调试输出
+        for i, route in enumerate(routes):
+            print(f"路线 {i+1}: 成功={route.get('success')}, 折线点数={len(route.get('polyline', '').split(';'))}")    
     
     # 0528最新修改：使用更现代的地图样式和增强的UI组件
     html_content = f"""
