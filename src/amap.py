@@ -367,7 +367,7 @@ def generate_map_html(locations, routes=None):
     center_lat = sum([loc[1] for loc in valid_locations]) / len(valid_locations)
 
     html_content = f"""
-    <div id="mapContainer" style="width: 100%; height: 400px;"></div>
+    <div id="mapContainer" style='width: 100%; height: 400px;'></div>
     <script src="https://webapi.amap.com/maps?v=1.4.15&key={AMAP_API_KEY}"></script>
     <script>
         var map = new AMap.Map('mapContainer', {{
@@ -390,9 +390,9 @@ def generate_map_html(locations, routes=None):
                          '<h3 style="margin: 0 0 10px 0; color: #333;">{info.get("name", addr)}</h3>' +
                          '<p style="margin: 5px 0;"><strong>地址:</strong> {addr}</p>' +
                          '<p style="margin: 5px 0;"><strong>类型:</strong> {info.get("type", "未知")}</p>' +
-                         {f"'<p style=\"margin:5px 0;\"><strong>电话:</strong> {info.get('tel', '暂无')}</p>' +" if info.get('tel') else ""}
-                         {f"'<p style=\"margin:5px 0;\"><strong>评分:</strong> ⭐{info.get('rating', '无')}</p>' +" if info.get('rating') else ""}
-                         {f"'<p style=\"margin:5px 0;\"><strong>人均消费:</strong> ¥{info.get('cost', '无')}</p>' +" if info.get('cost') else ""}
+                         {f'<p style="margin:5px 0;"><strong>电话:</strong> {info.get("tel", "暂无")}</p>' if info.get("tel") else ''} +
+                         {f'<p style="margin:5px 0;"><strong>评分:</strong> ⭐{info.get("rating", "无")}</p>' if info.get("rating") else ''} +
+                         {f'<p style="margin:5px 0;"><strong>人均消费:</strong> ¥{info.get("cost", "无")}</p>' if info.get("cost") else ''} +
                          '</div>',
                 offset: new AMap.Pixel(0, -30)
             }});
@@ -422,7 +422,7 @@ def generate_map_html(locations, routes=None):
                             html_content += f"""
                             var polyline{i} = new AMap.Polyline({{
                                 path: {path},
-                                strokeColor: "{color}",
+                                strokeColor: '{color}',
                                 strokeWeight: 6,
                                 strokeOpacity: 0.8,
                                 lineJoin: 'round',
@@ -436,8 +436,8 @@ def generate_map_html(locations, routes=None):
                                          '<p style="margin: 5px 0;"><strong>交通方式:</strong> {route["transport_mode"]}</p>' +
                                          '<p style="margin: 5px 0;"><strong>距离:</strong> {float(route["distance"])/1000:.2f} 公里</p>' +
                                          '<p style="margin: 5px 0;"><strong>预计时间:</strong> {int(route["duration"])/60:.0f} 分钟</p>' +
-                                         {f"'<p style=\"margin: 5px 0;\"><strong>过路费:</strong> {route.get('tolls', '0')} 元</p>' +" if route.get('tolls') and route.get('tolls') != '0' else ""} 
-                                         {f"'<p style=\"margin: 5px 0;\"><strong>红绿灯:</strong> {route.get('traffic_lights', '0')} 个</p>' +" if route.get('traffic_lights') and route.get('traffic_lights') != '0' else ""}
+                                         {f'<p style="margin: 5px 0;"><strong>过路费:</strong> {route.get("tolls", "0")} 元</p>' if route.get("tolls") and route.get("tolls") != "0" else ''} +
+                                         {f'<p style="margin: 5px 0;"><strong>红绿灯:</strong> {route.get("traffic_lights", "0")} 个</p>' if route.get("traffic_lights") and route.get("traffic_lights") != "0" else ''} +
                                          '</div>',
                                 offset: new AMap.Pixel(0, -30)
                             }});
@@ -500,9 +500,9 @@ def generate_route_map(locations, routes, transport_mode, show_details, optimize
     
     # 0528最新修改：使用更现代的地图样式和增强的UI组件
     html_content = f"""
-    <div style="position: relative;">
-        <div id="mapContainer" style="width: 100%; height: 600px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);"></div>
-        <div id="routeInfo" style="position: absolute; top: 10px; right: 10px; background: rgba(255,255,255,0.9); padding: 10px; border-radius: 5px; font-size: 14px; max-width: 200px;"></div>
+    <div style='position: relative;'>
+        <div id="mapContainer" style='width: 100%; height: 600px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);'></div>
+        <div id="routeInfo" style='position: absolute; top: 10px; right: 10px; background: rgba(255,255,255,0.9); padding: 10px; border-radius: 5px; font-size: 14px; max-width: 200px;'></div>
     </div>
     <script src="https://webapi.amap.com/maps?v=1.4.15&key={AMAP_API_KEY}"></script>
     <script src="https://webapi.amap.com/ui/1.1/main.js"></script>
@@ -553,9 +553,9 @@ def generate_route_map(locations, routes, transport_mode, show_details, optimize
                      '</div>' +
                      '<div style="margin-bottom: 8px;"><strong style="color: #666;">📍 地址:</strong> <span style="color: #333;">{addr}</span></div>' +
                      '<div style="margin-bottom: 8px;"><strong style="color: #666;">🏷️ 类型:</strong> <span style="color: #333;">{info.get("type", "未知")}</span></div>' +
-                     {f"'<div style=\"margin-bottom: 8px;\"><strong style=\"color: #666;\">📞 电话:</strong> <span style=\"color: #333;\">{info.get('tel', '暂无')}</span></div>' +" if info.get('tel') else ""} 
-                     {f"'<div style=\"margin-bottom: 8px;\"><strong style=\"color: #666;\">⭐ 评分:</strong> <span style=\"color: #FF6600;\">{info.get('rating', '暂无')}</span></div>' +" if info.get('rating') else ""}
-                     {f"'<div style=\"margin-bottom: 8px;\"><strong style=\"color: #666;\">💰 人均:</strong> <span style=\"color: #333;\">{info.get('cost', '暂无')}</span></div>' +" if info.get('cost') else ""}
+                     {f'<div style="margin-bottom: 8px;"><strong style="color: #666;">📞 电话:</strong> <span style="color: #333;">{info.get("tel", "暂无")}</span></div>' if info.get("tel") else ''} +
+                     {f'<div style="margin-bottom: 8px;"><strong style="color: #666;">⭐ 评分:</strong> <span style="color: #FF6600;">{info.get("rating", "暂无")}</span></div>' if info.get("rating") else ''} +
+                     {f'<div style="margin-bottom: 8px;"><strong style="color: #666;">💰 人均:</strong> <span style="color: #333;">{info.get("cost", "暂无")}</span></div>' if info.get("cost") else ''} +
                      '<div style="text-align: center; margin-top: 10px; padding-top: 10px; border-top: 1px solid #eee;">' +
                      '<span style="background: #3366FF; color: white; padding: 4px 8px; border-radius: 12px; font-size: 12px;">景点 #{i+1}</span>' +
                      '</div>' +
@@ -602,9 +602,9 @@ def generate_route_map(locations, routes, transport_mode, show_details, optimize
                             html_content += f"""
                             var polyline{i} = new AMap.Polyline({{
                                 path: {path},
-                                strokeColor: "{style['color']}",
-                                strokeWeight: {style['weight']},
-                                strokeOpacity: {style['opacity']},
+                                strokeColor: '{style["color"]}',
+                                strokeWeight: {style["weight"]},
+                                strokeOpacity: {style["opacity"]},
                                 lineJoin: 'round',
                                 lineCap: 'round',
                                 zIndex: 50,
@@ -615,14 +615,14 @@ def generate_route_map(locations, routes, transport_mode, show_details, optimize
                             // 0528最新修改：创建更详细的路线信息窗口
                             var routeInfoWindow{i} = new AMap.InfoWindow({{
                                 content: '<div style="padding: 15px; max-width: 280px; font-family: Arial, sans-serif;">' +
-                                         '<div style="border-bottom: 2px solid {style['color']}; padding-bottom: 8px; margin-bottom: 10px;">' +
-                                         '<h3 style="margin: 0; color: #333; font-size: 16px;">{style['icon']} 路线 {i+1}</h3>' +
+                                         '<div style="border-bottom: 2px solid {style["color"]}; padding-bottom: 8px; margin-bottom: 10px;">' +
+                                         '<h3 style="margin: 0; color: #333; font-size: 16px;">{style["icon"]} 路线 {i+1}</h3>' +
                                          '</div>' +
                                          '<div style="margin-bottom: 8px;"><strong style="color: #666;">🚀 交通方式:</strong> <span style="color: #333;">{get_transport_name(route["transport_mode"])}</span></div>' +
                                          '<div style="margin-bottom: 8px;"><strong style="color: #666;">📏 距离:</strong> <span style="color: #333; font-weight: bold;">{float(route["distance"])/1000:.2f} 公里</span></div>' +
                                          '<div style="margin-bottom: 8px;"><strong style="color: #666;">⏱️ 预计时间:</strong> <span style="color: #333; font-weight: bold;">{format_duration(int(route["duration"]))}</span></div>' +
-                                         {f"'<div style=\"margin-bottom: 8px;\"><strong style=\"color: #666;\">💰 过路费:</strong> <span style=\"color: #FF6600; font-weight: bold;\">{route.get('tolls', '0')} 元</span></div>' +" if route.get('tolls') and route.get('tolls') != '0' else ""} 
-                                         {f"'<div style=\"margin-bottom: 8px;\"><strong style=\"color: #666;\">🚦 红绿灯:</strong> <span style=\"color: #333;\">{route.get('traffic_lights', '0')} 个</span></div>' +" if route.get('traffic_lights') and route.get('traffic_lights') != '0' else ""}
+                                         {f'<div style="margin-bottom: 8px;"><strong style="color: #666;">💰 过路费:</strong> <span style="color: #FF6600; font-weight: bold;">{route.get("tolls", "0")} 元</span></div>' if route.get("tolls") and route.get("tolls") != "0" else ''} +
+                                         {f'<div style="margin-bottom: 8px;"><strong style="color: #666;">🚦 红绿灯:</strong> <span style="color: #333;">{route.get("traffic_lights", "0")} 个</span></div>' if route.get("traffic_lights") and route.get("traffic_lights") != "0" else ''} +
                                          '<div style="text-align: center; margin-top: 10px; padding-top: 10px; border-top: 1px solid #eee;">' +
                                          '<span style="font-size: 12px; color: #999;">点击路线查看详情</span>' +
                                          '</div>' +
@@ -641,15 +641,15 @@ def generate_route_map(locations, routes, transport_mode, show_details, optimize
                             // 0528最新修改：添加路线悬停效果
                             polyline{i}.on('mouseover', function() {{
                                 polyline{i}.setOptions({{
-                                    strokeWeight: {style['weight'] + 2},
+                                    strokeWeight: {style["weight"] + 2},
                                     strokeOpacity: 1.0
                                 }});
                             }});
                             
                             polyline{i}.on('mouseout', function() {{
                                 polyline{i}.setOptions({{
-                                    strokeWeight: {style['weight']},
-                                    strokeOpacity: {style['opacity']}
+                                    strokeWeight: {style["weight"]},
+                                    strokeOpacity: {style["opacity"]}
                                 }});
                             }});
                             
@@ -807,8 +807,6 @@ def format_duration(seconds):
         return f"{hours}小时{minutes}分钟"
     else:
         return f"{minutes}分钟"
-
-
 
 # 0528最新修改：新增批量地理编码函数
 def batch_geocode_addresses(address_list, max_concurrent=5):
