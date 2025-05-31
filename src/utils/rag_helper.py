@@ -124,7 +124,7 @@ if __name__ == "__main__":
             gr.Markdown("### 输入关键词（如城市名），从PDF文档中检索相关内容并由大模型优化输出（流式响应）")
 
             with gr.Row():
-                user_query = gr.Textbox(label="输入问题", placeholder="例如：上海有哪些推荐景点？")
+                user_query = gr.Textbox(label="输入问题", placeholder="例如：北京")
                 ask_btn = gr.Button("检索文档", variant="primary")
 
             with gr.Row():

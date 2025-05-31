@@ -1084,7 +1084,7 @@ with gr.Blocks() as demo:
         gr.Markdown("### 输入关键词（如城市名），从PDF文档中检索并由大模型回答")
 
         with gr.Row():
-            user_query = gr.Textbox(label="输入问题", placeholder="例如：上海有哪些推荐景点？")
+            user_query = gr.Textbox(label="输入问题", placeholder="例如：北京")
             ask_btn = gr.Button("问大模型", variant="primary")
 
         with gr.Row():
