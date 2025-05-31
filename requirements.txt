@@ -8,3 +8,11 @@ pydub
 pandas
 flask
 plotly
+dotenv
+langchain
+ langchain-community 
+langchain-huggingface
+ faiss-cpu
+ pymupdf 
+sseclient
+ huggingface-hub
