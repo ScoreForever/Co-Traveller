@@ -16,6 +16,14 @@ import pandas as pd
 import re
 import plotly.graph_objs as go
 from collections import defaultdict
+import subprocess
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from src.utils.rag_helper import load_pdfs_from_folder, build_retriever_from_docs, stream_search_docs
+
+from dotenv import load_dotenv
+load_dotenv()
 
 
 def load_env(filepath):
@@ -149,47 +157,62 @@ def generate_travel_plan_multi(place1, date1, dests, date2):
         total_days = (ret_date - dep_date).days + 1
         if total_days > 30:
             return "旅游时间过长，建议不超过30天", "请缩短旅行日期"
-        # 均分天数给每个目的地
-        days_per_dest = total_days // len(dests)
-        extra_days = total_days % len(dests)
-        travel_plan_data = []
-        morning_activities = ["参观", "品尝当地早餐", "参加文化体验活动"]
-        afternoon_activities = ["游览", "购物"]
-        evening_activities = ["体验夜景", "品尝特色晚餐"]
-        cur_date = dep_date
-        day_idx = 1
-        for i, dest in enumerate(dests):
-            stay_days = days_per_dest + (1 if i < extra_days else 0)
-            attractions = [f"{dest}景点{j}" for j in range(1, 4)]
-            for _ in range(stay_days):
-                # 上午活动
-                activity_time = "上午"
-                activity_place = random.choice(attractions)
-                activity_action = random.choice(morning_activities)
-                activity_transport = random.choice(["公交", "地铁", "步行", "出租车"])
-                travel_plan_data.append([f"Day{day_idx}（{cur_date.strftime('%Y-%m-%d')}）", activity_time, activity_place, activity_action, activity_transport])
 
-                # 下午活动
-                activity_time = "下午"
-                activity_place = random.choice(attractions)
-                activity_action = random.choice(afternoon_activities)
-                activity_transport = random.choice(["公交", "地铁", "步行", "出租车"])
-                travel_plan_data.append([f"Day{day_idx}（{cur_date.strftime('%Y-%m-%d')}）", activity_time, activity_place, activity_action, activity_transport])
+        # --- 新增：保存GUI输入，调用大模型，读取LLM输出 ---
+        try:
+            import sys, os, json
+            from pathlib import Path
+            import pandas as pd
 
-                # 晚上活动
-                activity_time = "晚上"
-                activity_place = random.choice(attractions)
-                activity_action = random.choice(evening_activities)
-                activity_transport = random.choice(["公交", "地铁", "步行", "出租车"])
-                travel_plan_data.append([f"Day{day_idx}（{cur_date.strftime('%Y-%m-%d')}）", activity_time, activity_place, activity_action, activity_transport])
+            # 保证路径为绝对路径
+            base_dir = Path(__file__).parent.parent.resolve()
+            save_dir = base_dir / "temp" / "travel_plans"
+            save_dir.mkdir(parents=True, exist_ok=True)
+            gui_path = save_dir / "route_planning_GUIoutput.json"
+            llm_path = save_dir / "route_planning_LLMoutput.json"
 
-                cur_date += timedelta(days=1)
-                day_idx += 1
+            # 保存GUI输入，增加返回日期
+            gui_plan = {
+                "departure": place1,
+                "departure_date": date1,
+                "return_date": date2,
+                "destinations": [{"place": d} for d in dests]
+            }
+            with open(str(gui_path), "w", encoding="utf-8") as f:
+                json.dump(gui_plan, f, ensure_ascii=False, indent=2)
+
+            # 调用route_planner.py（用绝对路径，cwd=save_dir）
+            route_planner_path = base_dir / "src" / "utils" / "route_planner.py"
+            subprocess.run([sys.executable, str(route_planner_path)], cwd=str(save_dir), check=True)
+
+            # 读取LLM输出
+            if llm_path.exists():
+                with open(str(llm_path), "r", encoding="utf-8") as f:
+                    llm_plan = json.load(f)
+                if isinstance(llm_plan, list) and llm_plan:
+                    headers = ["日期", "时间", "地点", "活动", "交通"]
+                    def norm(row):
+                        return [
+                            row.get("date") or row.get("日期") or "",
+                            row.get("time") or row.get("时间") or "",
+                            row.get("location") or row.get("地点") or "",
+                            row.get("activity") or row.get("活动") or "",
+                            row.get("transport") or row.get("交通") or "",
+                        ]
+                    df = pd.DataFrame([norm(r) for r in llm_plan], columns=headers)
+                    ticket_url = f"https://flights.ctrip.com/international/search/round-{place1}-{dests[0]}-{date1}-{date2}"
+                    ticket_link = f'<a href="{ticket_url}" target="_blank">点击查看票务信息</a>'
+                    return ticket_link, df
+        except Exception as e:
+            # 打印调试信息
+            print("LLM行程生成异常：", e)
+
+        # 如果大模型流程异常或无输出，返回空表格
+        headers = ["日期", "时间", "地点", "活动", "交通"]
+        df = pd.DataFrame([], columns=headers)
         ticket_url = f"https://flights.ctrip.com/international/search/round-{place1}-{dests[0]}-{date1}-{date2}"
         ticket_link = f'<a href="{ticket_url}" target="_blank">点击查看票务信息</a>'
-        headers = ["日期", "时间", "地点", "活动", "交通"]
-        travel_plan_data = pd.DataFrame(travel_plan_data, columns=headers)
-        return ticket_link, travel_plan_data
+        return ticket_link, df
     except Exception as e:
         return f"发生错误: {str(e)}", "无法生成旅行规划"
 
@@ -585,9 +608,9 @@ def save_travel_plan(place1, date1, place2, date2, ticket_link, travel_plan_data
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(plan_data, f, ensure_ascii=False, indent=2)
         
-        return f"旅行计划已保存为: {filename}", list_saved_plans()
+        return f"旅行计划已保存为: {filename}"
     except Exception as e:
-        return f"保存失败: {str(e)}", list_saved_plans()
+        return f"保存失败: {str(e)}"
 
 def summarize_travel_plan(plan_data):
     """生成旅行计划摘要"""
@@ -638,7 +661,7 @@ def load_travel_plan(filename):
     file_path = save_dir / filename
     
     if not file_path.exists():
-        return None, "未找到指定的旅行计划", []
+        return None, None, None, None, None, None, "未找到指定的旅行计划"
     
     try:
         with open(file_path, "r", encoding="utf-8") as f:
@@ -654,10 +677,11 @@ def load_travel_plan(filename):
             plan["place2"], 
             plan["date2"], 
             plan["ticket_link"], 
-            travel_plan_data
+            travel_plan_data,
+            "行程已加载"
         )
     except Exception as e:
-        return None, f"加载失败: {str(e)}", []
+        return None, None, None, None, None, None, f"加载失败: {str(e)}"
 
 def delete_travel_plan(filename):
     """删除保存的旅行计划"""
@@ -676,6 +700,8 @@ def delete_travel_plan(filename):
 # 创建界面
 with gr.Blocks() as demo:
     gr.Markdown("# 🧳 旅行助手")
+    
+    # 查票与行程规划Tab
     with gr.Tab("查票与行程规划"):
         gr.Markdown("### 输入出发地、多个目的地和返程日期，获取查票链接和旅行建议")
         with gr.Row():
@@ -695,7 +721,8 @@ with gr.Blocks() as demo:
                         interactive=True
                     )
                     dest_inputs.append(tb)
-                date2 = gr.Textbox(label="返回日期", placeholder="YYYY-MM-DD")  # 新增返程日期输入框
+                date2 = gr.Textbox(label="返回日期", placeholder="YYYY-MM-DD")
+        
         with gr.Row():
             clear_btn = gr.Button("清除")
             submit_btn = gr.Button("提交", variant="primary")
@@ -706,24 +733,14 @@ with gr.Blocks() as demo:
         with gr.Row():
             travel_plan_output = gr.Dataframe(
                 headers=["日期", "时间", "地点", "活动", "交通"],
-                datatype=["str", "str", "str", "str", "str"],
                 label="旅行规划",
                 interactive=False
             )
         
         with gr.Row():
-            with gr.Column(scale=1):
-                save_btn = gr.Button("💾 保存当前计划")
-                filename_input = gr.Textbox(label="保存文件名", placeholder="可选，留空则自动生成")
-            with gr.Column(scale=2):
-                saved_plans_output = gr.JSON(label="已保存的旅行计划")
-        
-        with gr.Row():
-            with gr.Column(scale=1):
-                load_btn = gr.Button("📂 加载选中计划")
-                delete_btn = gr.Button("🗑️ 删除选中计划")
-            with gr.Column(scale=2):
-                file_selector = gr.Dropdown(choices=[], label="选择已保存的计划")
+            save_btn = gr.Button("💾 保存当前计划")
+            filename_input = gr.Textbox(label="保存文件名", placeholder="可选，留空则自动生成")
+            save_status = gr.Textbox(label="保存状态", interactive=False)
         
         # 动态显示下一个目的地和日期输入框
         def show_next_dest(text, index):
@@ -733,13 +750,14 @@ with gr.Blocks() as demo:
                     dest_inputs[index + 1]: gr.Textbox(visible=True),
                 }
             return {current_index: index}
+        
         for idx in range(MAX_INPUTS - 1):
             dest_inputs[idx].submit(
                 show_next_dest,
                 inputs=[dest_inputs[idx], current_index],
                 outputs=[current_index, dest_inputs[idx + 1]],
             )
-
+        
         # 收集所有已填写的目的地和日期并调用多目的地行程规划
         def update_travel_plan(place1, date1, *args):
             dests = []
@@ -750,53 +768,28 @@ with gr.Blocks() as demo:
             if not dests or not date2_val:
                 return "请至少填写一个目的地和返程日期", None
             return generate_travel_plan_multi(place1, date1, dests, date2_val)
+        
         submit_btn.click(
             fn=update_travel_plan,
             inputs=[place1, date1] + dest_inputs + [date2],
             outputs=[ticket_url_output, travel_plan_output]
         )
-        clear_btn.click(
-            fn=lambda: [None, None] + [None]*MAX_INPUTS + [None, None, None],
-            inputs=[],
-            outputs=[place1, date1] + dest_inputs + [date2, ticket_url_output, travel_plan_output]
-        )
-        def update_file_selector():
-            plans = list_saved_plans()
-            return [plan["filename"] for plan in plans]
         
-        # 保存时只保存第一个目的地和第一个日期
+        clear_btn.click(
+            fn=lambda: [None, None] + [None]*MAX_INPUTS + [None, None, None, None],
+            inputs=[],
+            outputs=[place1, date1] + dest_inputs + [date2, ticket_url_output, travel_plan_output, save_status]
+        )
+        
         save_btn.click(
             fn=lambda p1, d1, *args: save_travel_plan(
-                p1, d1, args[0] if args[0] else "", args[-4] if len(args) > 3 else "", args[-3], args[-2], args[-1]
+                p1, d1, args[0] if args[0] else "", args[-2] if len(args) > 1 else "", args[-3], args[-4], args[-1]
             ),
             inputs=[place1, date1] + dest_inputs + [date2, ticket_url_output, travel_plan_output, filename_input],
-            outputs=[gr.Textbox(label="保存状态"), saved_plans_output]
-        ).then(
-            fn=update_file_selector,
-            inputs=[],
-            outputs=file_selector
-        )
-        load_btn.click(
-            fn=lambda filename: load_travel_plan(filename) if filename else (None, "请先选择一个计划", []),
-            inputs=[file_selector],
-            outputs=[place1, date1, dest_inputs[0], ticket_url_output, travel_plan_output]
-        )
-        delete_btn.click(
-            fn=lambda filename: delete_travel_plan(filename) if filename else ("请先选择一个计划", []),
-            inputs=[file_selector],
-            outputs=[gr.Textbox(label="删除状态"), saved_plans_output]
-        ).then(
-            fn=update_file_selector,
-            inputs=[],
-            outputs=file_selector
-        )
-        
-        demo.load(
-            fn=lambda: (list_saved_plans(), update_file_selector()),
-            inputs=[],
-            outputs=[saved_plans_output, file_selector]
+            outputs=[save_status]
         )
     
+    # 语音输入Tab
     with gr.Tab("语音输入"):    
         gr.Markdown("### 🗣️ 语音与智能体对话")
         chat_state = gr.State([])
@@ -818,7 +811,7 @@ with gr.Blocks() as demo:
     
         stt_btn.click(
             fn=process_speech,
-            inputs=[audio_input, chat_state, gr.Textbox(visible=False, value=BAIDU_API_KEY)],  # 使用env中的API_KEY
+            inputs=[audio_input, chat_state, gr.Textbox(visible=False, value=BAIDU_API_KEY)],
             outputs=[gr.Textbox(visible=False), chatbot]
         )
     
@@ -826,14 +819,13 @@ with gr.Blocks() as demo:
             fn=lambda: ([], []),
             outputs=[chat_state, chatbot]
         )
-
+    # 城市景点地图Tab
     with gr.Tab("城市景点地图"):    
         gr.Markdown("### 🌍 城市景点地图")
     
         with gr.Row():
             with gr.Column():
                 place = gr.Textbox(label="所在城市", placeholder="例如：北京")
-                date = gr.Textbox(label="日期", placeholder="YYYY-MM-DD")
                 map_submit_btn = gr.Button("获取地图", variant="primary")
                 map_clear_btn = gr.Button("清除")
         
@@ -841,22 +833,22 @@ with gr.Blocks() as demo:
                 map_image = gr.Image(label="城市地图", height=400)
                 map_caption = gr.Textbox(label="地图说明", interactive=False)
     
-        def update_city_map(place, date):
-            img, caption = generate_city_map(place, date)
+        def update_city_map(place):  # 修改函数参数，移除date
+            img, caption = generate_city_map(place, None)  # 调用时不传递日期
             return img, caption
-        
+    
         map_submit_btn.click(
             fn=update_city_map,
-            inputs=[place, date],
+            inputs=[place],  # 仅传递place参数
             outputs=[map_image, map_caption]
         )
-        
+    
         map_clear_btn.click(
             fn=lambda: [None, None, None],
             inputs=[],
-            outputs=[place, date, map_image]
+            outputs=[place, map_image, map_caption]
         )
-
+    # 天气查询Tab
     with gr.Tab("🌦️ 地点天气查询"):
         gr.Markdown("### 输入地点，查看未来3天天气图标、描述、生活指数和地图")
 
@@ -872,7 +864,7 @@ with gr.Blocks() as demo:
             weather_output = gr.Textbox(label="天气信息", lines=10, interactive=False)
 
         with gr.Row():
-            indices_output = gr.HTML(label="生活指数")  # ✅ 改为 HTML，支持图标展示
+            indices_output = gr.HTML(label="生活指数")
 
         with gr.Row():
             map_image_output = gr.Image(label="地图", height=400)
@@ -889,7 +881,6 @@ with gr.Blocks() as demo:
             location = f"{lng},{lat}"
             headers = {
                 "X-QW-Api-Key": X_QW_API_KEY
-
             }
 
             # 天气图标和文本描述
@@ -925,13 +916,11 @@ with gr.Blocks() as demo:
             except Exception as e:
                 weather_summary = f"天气请求错误：{str(e)}"
 
-            # 生活指数（图标 + 分组 + 彩色标签）
-            # 请求生活指数（图标 + 分组 + 美化 + 修复字段）
+            # 生活指数
             indices_url = "https://me3md84kpk.re.qweatherapi.com/v7/indices/3d"
             try:
                 indices_resp = requests.get(indices_url, headers=headers, params={"location": location, "type": "1,2,3,5,6,9,14"})
                 indices_data = indices_resp.json()
-
 
                 indices_summary = '''
                 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
@@ -968,7 +957,7 @@ with gr.Blocks() as demo:
                 from collections import defaultdict
                 date_groups = defaultdict(list)
                 for item in indices_data.get("daily", []):
-                    date_groups[item["date"]].append(item)  # ✅ 修复字段名
+                    date_groups[item["date"]].append(item)
 
                 for date in sorted(date_groups.keys()):
                     indices_summary += f"<h4 style='margin-top:1em;'>📅 {date}</h4><ul style='list-style:none;padding-left:0;'>"
@@ -988,7 +977,6 @@ with gr.Blocks() as demo:
 
             except Exception as e:
                 indices_summary = f"<div>指数请求错误：{str(e)}</div>"
-
 
             # 地图显示
             try:
@@ -1017,12 +1005,103 @@ with gr.Blocks() as demo:
             inputs=[],
             outputs=[icon_html_output, weather_output, indices_output, map_image_output, map_caption_output]
         )
+    #行程历史管理Tab
+    with gr.Tab("行程历史管理"):
+        gr.Markdown("### 已保存的旅行计划")
+        
+        with gr.Row():
+            history_table = gr.Dataframe(
+                headers=["文件名", "出发地", "目的地", "出发日期", "返回日期", "保存时间", "摘要"],
+                label="历史行程",
+                interactive=False
+            )
+        
+        with gr.Row():
+            with gr.Column(scale=1):
+                file_selector = gr.Dropdown(label="选择行程")
+                load_btn = gr.Button("加载行程")
+                delete_btn = gr.Button("删除行程")
+            with gr.Column(scale=2):
+                status_msg = gr.Textbox(label="操作状态", interactive=False)
+        
+        # 更新历史表格和文件选择器
+        def update_history_table():
+            plans = list_saved_plans()
+            if not plans:
+                return pd.DataFrame(columns=["文件名", "出发地", "目的地", "出发日期", "返回日期", "保存时间", "摘要"]), []
+            df = pd.DataFrame(plans)
+            return df, df["filename"].tolist()
+        
+        # 初始化时加载历史行程
+        demo.load(
+            fn=update_history_table,
+            outputs=[history_table, file_selector]
+        )
+        
+        # 加载行程
+        load_btn.click(
+            fn=lambda filename: load_travel_plan(filename) if filename else (None, None, None, None, None, None, "请先选择一个计划"),
+            inputs=[file_selector],
+            outputs=[place1, date1, dest_inputs[0], date2, ticket_url_output, travel_plan_output, status_msg]
+        ).then(
+            fn=update_history_table,
+            outputs=[history_table, file_selector]
+        )
+        
+        # 删除行程
+        delete_btn.click(
+            fn=lambda filename: delete_travel_plan(filename) if filename else ("请先选择一个计划", []),
+            inputs=[file_selector],
+            outputs=[status_msg, history_table]
+        ).then(
+            fn=update_history_table,
+            outputs=[file_selector]
+        )
+    def load_env(filepath):
+        env = {}
+        if os.path.exists(filepath):
+            with open(filepath, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if "=" in line:
+                        k, v = line.split("=", 1)
+                        env[k.strip()] = v.strip()
+        return env
 
+    env_path = Path(__file__).resolve().parent.parent / "API.env"
+    env_vars = load_env(env_path)
+    os.environ.update(env_vars)
 
+    # ✅ 2. 加载 PDF 并构建检索系统（初始化一次即可）
+    dataset_dir = Path(__file__).resolve().parent.parent / "dataset"
+    rag_docs = load_pdfs_from_folder(dataset_dir)
+    retriever = build_retriever_from_docs(rag_docs)
 
+    # ✅ 3. RAG 问答界面
+    with gr.Tab("📚 文档问答助手"):
+        gr.Markdown("### 输入关键词（如城市名），从PDF文档中检索并由大模型回答")
 
+        with gr.Row():
+            user_query = gr.Textbox(label="输入问题", placeholder="例如：上海有哪些推荐景点？")
+            ask_btn = gr.Button("问大模型", variant="primary")
 
+        with gr.Row():
+            rag_answer = gr.Textbox(label="回答结果", lines=10, interactive=False)
 
+        def query_docs_with_rag_stream(query):
+            if not query.strip():
+                yield "请输入问题"
+                return
+            buff=""
+            for chunk in stream_search_docs(query, retriever):
+                if chunk is None: continue
+                else:buff+= chunk
+                yield buff
+            yield buff
+
+        ask_btn.click(fn=query_docs_with_rag_stream, inputs=[user_query], outputs=[rag_answer])
 
 if __name__ == "__main__":
     demo.launch()
