@@ -17,6 +17,13 @@ import re
 import plotly.graph_objs as go
 from collections import defaultdict
 import subprocess
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from src.utils.rag_helper import load_pdfs_from_folder, build_retriever_from_docs, stream_search_docs
+
+from dotenv import load_dotenv
+load_dotenv()
 
 
 def load_env(filepath):
@@ -1050,6 +1057,51 @@ with gr.Blocks() as demo:
             fn=update_history_table,
             outputs=[file_selector]
         )
-    
+    def load_env(filepath):
+        env = {}
+        if os.path.exists(filepath):
+            with open(filepath, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if "=" in line:
+                        k, v = line.split("=", 1)
+                        env[k.strip()] = v.strip()
+        return env
+
+    env_path = Path(__file__).resolve().parent.parent / "API.env"
+    env_vars = load_env(env_path)
+    os.environ.update(env_vars)
+
+    # ✅ 2. 加载 PDF 并构建检索系统（初始化一次即可）
+    dataset_dir = Path(__file__).resolve().parent.parent / "dataset"
+    rag_docs = load_pdfs_from_folder(dataset_dir)
+    retriever = build_retriever_from_docs(rag_docs)
+
+    # ✅ 3. RAG 问答界面
+    with gr.Tab("📚 文档问答助手"):
+        gr.Markdown("### 输入关键词（如城市名），从PDF文档中检索并由大模型回答")
+
+        with gr.Row():
+            user_query = gr.Textbox(label="输入问题", placeholder="例如：上海有哪些推荐景点？")
+            ask_btn = gr.Button("问大模型", variant="primary")
+
+        with gr.Row():
+            rag_answer = gr.Textbox(label="回答结果", lines=10, interactive=False)
+
+        def query_docs_with_rag_stream(query):
+            if not query.strip():
+                yield "请输入问题"
+                return
+            buff=""
+            for chunk in stream_search_docs(query, retriever):
+                if chunk is None: continue
+                else:buff+= chunk
+                yield buff
+            yield buff
+
+        ask_btn.click(fn=query_docs_with_rag_stream, inputs=[user_query], outputs=[rag_answer])
+
 if __name__ == "__main__":
     demo.launch()
