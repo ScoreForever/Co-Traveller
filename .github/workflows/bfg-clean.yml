@@ -16,9 +16,9 @@ jobs:
           wget https://repo1.maven.org/maven2/com/madgag/bfg/1.14.0/bfg-1.14.0.jar -O bfg.jar
 
       # 示例：清理所有大于100M的文件；如需指定文件名/类型/敏感内容可更改此步
-      - name: Run BFG to remove files larger than 100M
+      - name: Run BFG to remove files larger than 5.80M
         run: |
-          java -jar bfg.jar --strip-blobs-bigger-than 100M repo.git
+          java -jar bfg.jar --strip-blobs-bigger-than 5.80M repo.git
 
       # 可选：如果要删除特定文件（如API.env），可解开此步并修改文件名
       # - name: Run BFG to delete API.env from history
