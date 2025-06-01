@@ -1,0 +1,42 @@
+name: Clean Git History with BFG
+
+on:
+  workflow_dispatch: # 允许手动触发
+
+jobs:
+  clean-history:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone source repo as a bare mirror
+        run: |
+          git clone --mirror https://github.com/ScoreForever/Co-Traveller.git repo.git
+
+      - name: Download BFG Repo-Cleaner
+        run: |
+          wget https://repo1.maven.org/maven2/com/madgag/bfg/1.14.0/bfg-1.14.0.jar -O bfg.jar
+
+      # 示例：清理所有大于100M的文件；如需指定文件名/类型/敏感内容可更改此步
+      - name: Run BFG to remove files larger than 100M
+        run: |
+          java -jar bfg.jar --strip-blobs-bigger-than 100M repo.git
+
+      # 可选：如果要删除特定文件（如API.env），可解开此步并修改文件名
+      # - name: Run BFG to delete API.env from history
+      #   run: |
+      #     java -jar bfg.jar --delete-files API.env repo.git
+
+      - name: Expire reflog and run aggressive garbage collection
+        run: |
+          cd repo.git
+          git reflog expire --expire=now --all
+          git gc --prune=now --aggressive
+
+      - name: Set remote to new cleaned repo
+        run: |
+          cd repo.git
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/ScoreForever/Co-Traveller-rewrite.git
+
+      - name: Force push cleaned history to new repo
+        run: |
+          cd repo.git
+          git push --mirror --force

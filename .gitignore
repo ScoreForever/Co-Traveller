@@ -177,3 +177,5 @@ cython_debug/
 /temp/
 *.tmp
 *.log
+
+API.env
