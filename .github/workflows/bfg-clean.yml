@@ -34,7 +34,7 @@ jobs:
       - name: Set remote to new cleaned repo
         run: |
           cd repo.git
-          git remote set-url origin https://x-access-token:${{ secrets.CO_TRAVELLER_REWRITE_2 }}@github.com/ScoreForever/Co-Traveller-rewrite.git
+          git remote set-url origin https://x-access-token:${{ secrets.CO_TRAVELLER_REWRITE_2 }}@github.com/ScoreForever/Co-Traveller.git
 
       - name: Force push cleaned history to new repo
         run: |
