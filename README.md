@@ -32,6 +32,11 @@ A group assignment for Peking University, an agent that helps you make travel pl
         - `pdfkit`
         - `python-dotenv`  # 用于环境变量加载
 
+## 知识库准备（PDF 旅行攻略）
+
+由于 `src/utils/rag_helper.py` 需要为大模型提供知识库，请在项目根目录下新建一个名为 `dataset` 的文件夹，并将你的 PDF 旅行攻略文件放入其中。  
+每次运行检索功能时，系统会自动加载该文件夹下的所有 PDF 文档作为知识库。
+
 ## API 密钥配置
 
 请在项目根目录下新建或编辑 `API.env` 文件，并写入如下内容（将密钥替换为你自己的）：

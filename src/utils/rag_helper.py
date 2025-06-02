@@ -62,6 +62,8 @@ def load_pdfs_from_folder(folder_path):
 
 # 构建仅检索的向量检索器
 def build_retriever_from_docs(documents):
+    import torch
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
     chunks = splitter.split_documents(documents)
     if not chunks:
@@ -69,7 +71,7 @@ def build_retriever_from_docs(documents):
 
     embedder = HuggingFaceEmbeddings(
         model_name="BAAI/bge-small-zh",
-        model_kwargs={"device": "cpu"}
+        model_kwargs={"device": device}
     )
     vectordb = FAISS.from_documents(chunks, embedder)
     return vectordb.as_retriever(search_kwargs={"k": 20})
