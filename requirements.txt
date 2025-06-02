@@ -1,6 +1,6 @@
 markdown
 pdfkit
-dotenv
+python-dotenv
 gradio
 numpy
 pillow
@@ -8,11 +8,10 @@ pydub
 pandas
 flask
 plotly
-dotenv
 langchain
- langchain-community 
+langchain-community
 langchain-huggingface
- faiss-cpu
- pymupdf 
+faiss-cpu
+pymupdf
 sseclient
- huggingface-hub
+huggingface-hub
