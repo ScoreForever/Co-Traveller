@@ -12,6 +12,7 @@ import json
 
 # 远程 Qwen API 流式响应封装
 def stream_qwen_response(prompt):
+    import time
     api_key = os.getenv("SILICON_API_KEY")
     if not api_key:
         raise ValueError("请设置 SILICON_API_KEY 环境变量")
@@ -22,7 +23,7 @@ def stream_qwen_response(prompt):
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "Qwen/Qwen3-8B",
+        "model": "Pro/deepseek-ai/DeepSeek-V3",
         "stream": True,
         "messages": [
             {"role": "system", "content": "你是一个友好的中文助手。"},
@@ -30,20 +31,30 @@ def stream_qwen_response(prompt):
         ]
     }
 
-    with requests.post("https://api.siliconflow.cn/v1/chat/completions", headers=headers, json=payload, stream=True) as response:
-        if response.status_code != 200:
-            raise RuntimeError(f"请求失败：{response.status_code} {response.text}")
+    try:
+        with requests.post(
+            "https://api.siliconflow.cn/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            stream=True,
+            timeout=60
+        ) as response:
+            if response.status_code != 200:
+                raise RuntimeError(f"请求失败：{response.status_code} {response.text}")
 
-        client = sseclient.SSEClient(response)
-        for event in client.events():
-            if event.data == "[DONE]":
-                break
-            try:
-                delta = json.loads(event.data)
-                content = delta.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                yield content
-            except Exception as e:
-                yield f"[流式解析错误] {e}"
+            client = sseclient.SSEClient(response)
+            for event in client.events():
+                if event.data == "[DONE]":
+                    break
+                try:
+                    delta = json.loads(event.data)
+                    content = delta.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                    if content:
+                        yield content
+                except Exception as e:
+                    yield f"[流式解析错误] {e}"
+    except requests.exceptions.RequestException as e:
+        yield f"[网络请求异常] {e}"
 
 # 加载 PDF 文件夹
 def load_pdfs_from_folder(folder_path):
@@ -63,14 +74,22 @@ def load_pdfs_from_folder(folder_path):
 # 构建仅检索的向量检索器
 def build_retriever_from_docs(documents):
     import torch
+    from packaging import version
+    # 检查 torch 版本
+    if version.parse(torch.__version__) < version.parse("2.6.0"):
+        raise RuntimeError(
+            f"当前 torch 版本为 {torch.__version__}，请升级到 2.6.0 或更高版本：\n"
+            f"pip install --upgrade torch"
+        )
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"向量检索模型加载设备: {device}")  # 新增：打印设备信息
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
     chunks = splitter.split_documents(documents)
     if not chunks:
         raise ValueError("文档内容为空，无法构建向量数据库")
 
     embedder = HuggingFaceEmbeddings(
-        model_name="BAAI/bge-small-zh",
+        model_name="./models/bge-small-zh",  # 使用本地模型路径
         model_kwargs={"device": device}
     )
     vectordb = FAISS.from_documents(chunks, embedder)
