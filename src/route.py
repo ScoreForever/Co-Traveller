@@ -4,16 +4,8 @@ import folium
 from folium.plugins import MiniMap, Fullscreen
 from typing import Dict, List, Tuple, Optional
 
-# 高德地图API配置
-AMAP_API_KEY = ""  # 将在travel.py中设置
-
-# 在文件顶部添加全局变量
-AMAP_API_KEY = None
-
-# 添加设置 API 密钥的函数
-def set_amap_api_key(api_key):
-    global AMAP_API_KEY
-    AMAP_API_KEY = api_key
+# 配置高德API密钥（需替换为你的真实Key）
+AMAP_API_KEY = "27c0337b84e44bb373bb2724a6ea157d"
 
 def geocode_location(location_name: str) -> Optional[Tuple[float, float]]:
     """地理编码：将地名转换为经纬度"""
@@ -229,7 +221,7 @@ def process_route(start_location, end_location):
     except Exception as e:
         return f"处理过程中发生错误: {str(e)}", "", ""
 
-
+# 创建Gradio界面
 def create_interface():
     with gr.Blocks(title="高德地图路线规划", theme=gr.themes.Soft()) as app:
         gr.Markdown("# 🗺️ 高德地图路线规划")
@@ -291,4 +283,7 @@ def create_interface():
     
     return app
 
-# 原 create_interface 函数行224-284已删除，因主程序 travel.py 已包含完整路线规划界面
+# 启动应用
+if __name__ == "__main__":
+    app = create_interface()
+    app.launch()
