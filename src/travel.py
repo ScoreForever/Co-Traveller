@@ -170,6 +170,96 @@ def generate_travel_plan(place1, date1, place2, date2):
 
 def generate_travel_plan_multi(place1, date1, dests, date2):
     """
+    流式输出旅行规划，每次yield部分DataFrame
+    """
+    try:
+        if not is_valid_date(date1):
+            yield "日期格式错误或日期必须在当日或之后", None
+            return
+        if not is_valid_date(date2):
+            yield "日期格式错误或日期必须在当日或之后", None
+            return
+        if not dests:
+            yield "请至少填写一个目的地", None
+            return
+        dep_date = datetime.strptime(date1, "%Y-%m-%d").date()
+        ret_date = datetime.strptime(date2, "%Y-%m-%d").date()
+        if ret_date < dep_date:
+            yield "返回日期不能早于出发日期", None
+            return
+        total_days = (ret_date - dep_date).days + 1
+        if total_days > 30:
+            yield "旅游时间过长，建议不超过30天", None
+            return
+
+        # --- 保存GUI输入，调用大模型，读取LLM输出 ---
+        import sys, os, json
+        from pathlib import Path
+        import pandas as pd
+
+        base_dir = Path(__file__).parent.parent.resolve()
+        save_dir = base_dir / "temp" / "travel_plans"
+        save_dir.mkdir(parents=True, exist_ok=True)
+        gui_path = save_dir / "route_planning_GUIoutput.json"
+        llm_path = save_dir / "route_planning_LLMoutput.jsonl"
+
+        gui_plan = {
+            "departure": place1,
+            "departure_date": date1,
+            "return_date": date2,
+            "destinations": [{"place": d} for d in dests]
+        }
+        with open(str(gui_path), "w", encoding="utf-8") as f:
+            json.dump(gui_plan, f, ensure_ascii=False, indent=2)
+
+        # 调用route_planner.py（用绝对路径，cwd=save_dir）
+        route_planner_path = base_dir / "src" / "utils" / "route_planner.py"
+        # 启动子进程，异步写入llm_path
+        proc = subprocess.Popen([sys.executable, str(route_planner_path)], cwd=str(save_dir))
+
+        # 流式读取llm_path（JSONL），每次yield部分DataFrame
+        headers = ["日期", "时间", "地点", "活动", "交通"]
+        ticket_url = f"https://flights.ctrip.com/international/search/round-{place1}-{dests[0]}-{date1}-{date2}"
+        ticket_link = f'<a href="{ticket_url}" target="_blank">点击查看票务信息</a>'
+        yielded_rows = []
+        last_size = 0
+        max_wait = 120  # 最多等待2分钟
+        waited = 0
+        while proc.poll() is None or (llm_path.exists() and os.path.getsize(llm_path) > last_size):
+            if llm_path.exists():
+                with open(str(llm_path), "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                new_lines = lines[len(yielded_rows):]
+                for line in new_lines:
+                    try:
+                        row = json.loads(line)
+                        norm = [
+                            row.get("date") or row.get("日期") or "",
+                            row.get("time") or row.get("时间") or "",
+                            row.get("location") or row.get("地点") or "",
+                            row.get("activity") or row.get("活动") or "",
+                            row.get("transport") or row.get("交通") or "",
+                        ]
+                        yielded_rows.append(norm)
+                        df = pd.DataFrame(yielded_rows, columns=headers)
+                        yield ticket_link, df
+                    except Exception:
+                        continue
+                last_size = os.path.getsize(llm_path)
+            time.sleep(0.5)
+            waited += 0.5
+            if waited > max_wait:
+                break
+        # 若无内容，返回空表格
+        if not yielded_rows:
+            df = pd.DataFrame([], columns=headers)
+            yield ticket_link, df
+    except Exception as e:
+        yield f"发生错误: {str(e)}", None
+
+# 新增：支持多目的地和多日期的行程规划（改进版）
+def generate_travel_plan_multi_v2(place1, date1, dests, date2):
+    """
     place1: 出发地
     date1: 出发日期
     dests: 目的地列表
@@ -242,95 +332,6 @@ def generate_travel_plan_multi(place1, date1, dests, date2):
         # 如果大模型流程异常或无输出，返回空表格
         headers = ["日期", "时间", "地点", "活动", "交通"]
         df = pd.DataFrame([], columns=headers)
-        ticket_url = f"https://flights.ctrip.com/international/search/round-{place1}-{dests[0]}-{date1}-{date2}"
-        ticket_link = f'<a href="{ticket_url}" target="_blank">点击查看票务信息</a>'
-        return ticket_link, df
-    except Exception as e:
-        return f"发生错误: {str(e)}", "无法生成旅行规划"
-
-# 新增：支持多目的地和多日期的行程规划（改进版）
-def generate_travel_plan_multi_v2(place1, date1, dests, date2):
-    """
-    place1: 出发地
-    date1: 出发日期
-    dests: 目的地列表
-    date2: 返回日期
-    """
-    try:
-        if not is_valid_date(date1):
-            return "日期格式错误或日期必须在当日或之后", "请检查出发日期"
-        if not is_valid_date(date2):
-            return "日期格式错误或日期必须在当日或之后", "请检查返回日期"
-        if not dests:
-            return "请至少填写一个目的地", "请检查输入"
-        dep_date = datetime.strptime(date1, "%Y-%m-%d").date()
-        ret_date = datetime.strptime(date2, "%Y-%m-%d").date()
-        if ret_date < dep_date:
-            return "返回日期不能早于出发日期", "请检查日期顺序"
-        total_days = (ret_date - dep_date).days + 1
-        if total_days > 30:
-            return "旅游时间过长，建议不超过30天", "请缩短旅行日期"
-        
-        # 初始化行程数据
-        travel_plan_data = []
-        all_attractions = []  # 收集所有景点名称
-        morning_activities = ["参观", "品尝当地早餐", "参加文化体验活动"]
-        afternoon_activities = ["游览", "购物"]
-        evening_activities = ["体验夜景", "品尝特色晚餐"]
-        
-        cur_date = dep_date
-        day_idx = 1
-
-        # --- 新增：保存GUI输入，调用大模型，读取LLM输出 ---
-        try:
-            import sys, os, json
-            from pathlib import Path
-            import pandas as pd
-
-            # 保证路径为绝对路径
-            base_dir = Path(__file__).parent.parent.resolve()
-            save_dir = base_dir / "temp" / "travel_plans"
-            save_dir.mkdir(parents=True, exist_ok=True)
-            gui_path = save_dir / "route_planning_GUIoutput.json"
-            llm_path = save_dir / "route_planning_LLMoutput.json"
-
-            # 保存GUI输入，增加返回日期
-            gui_plan = {
-                "departure": place1,
-                "departure_date": date1,
-                "return_date": date2,
-                "destinations": [{"place": d} for d in dests]
-            }
-            with open(str(gui_path), "w", encoding="utf-8") as f:
-                json.dump(gui_plan, f, ensure_ascii=False, indent=2)
-
-            # 调用route_planner.py（用绝对路径，cwd=save_dir）
-            route_planner_path = base_dir / "src" / "utils" / "route_planner.py"
-            subprocess.run([sys.executable, str(route_planner_path)], cwd=str(save_dir), check=True)
-
-            # 读取LLM输出
-            if llm_path.exists():
-                with open(str(llm_path), "r", encoding="utf-8") as f:
-                    llm_plan = json.load(f)
-                if isinstance(llm_plan, list) and llm_plan:
-                    headers = ["日期", "时间", "地点", "活动", "交通"]
-                    def norm(row):
-                        return [
-                            row.get("date") or row.get("日期") or "",
-                            row.get("time") or row.get("时间") or "",
-                            row.get("location") or row.get("地点") or "",
-                            row.get("activity") or row.get("活动") or "",
-                            row.get("transport") or row.get("交通") or "",
-                        ]
-                    df = pd.DataFrame([norm(r) for r in llm_plan], columns=headers)
-                    ticket_url = f"https://flights.ctrip.com/international/search/round-{place1}-{dests[0]}-{date1}-{date2}"
-                    ticket_link = f'<a href="{ticket_url}" target="_blank">点击查看票务信息</a>'
-                    return ticket_link, df
-        except Exception as e:
-            # 打印调试信息
-            print("LLM行程生成异常：", e)
-
-        # 如果大模型流程异常或无输出，返回空表格
         ticket_url = f"https://flights.ctrip.com/international/search/round-{place1}-{dests[0]}-{date1}-{date2}"
         ticket_link = f'<a href="{ticket_url}" target="_blank">点击查看票务信息</a>'
 
@@ -776,26 +777,24 @@ with gr.Blocks() as demo:
                     )
                     dest_inputs.append(tb)
                 date2 = gr.Textbox(label="返回日期", placeholder="YYYY-MM-DD")
-        
+
         with gr.Row():
             clear_btn = gr.Button("清除")
             submit_btn = gr.Button("提交", variant="primary")
-        
-        with gr.Row():
-            ticket_url_output = gr.HTML(label="查票网址")
-        
-        with gr.Row():
-            travel_plan_output = gr.Dataframe(
-                headers=["日期", "时间", "地点", "活动", "交通"],
-                label="旅行规划",
-                interactive=False
-            )
-        
+
+        # 只保留一个“旅行规划”表格（去除多余的gr.Row）
+        ticket_url_output = gr.HTML(label="查票网址")
+        travel_plan_output = gr.Dataframe(
+            headers=["日期", "时间", "地点", "活动", "交通"],
+            label="旅行规划",
+            interactive=False
+        )
+
         with gr.Row():
             save_btn = gr.Button("💾 保存当前计划")
             filename_input = gr.Textbox(label="保存文件名", placeholder="可选，留空则自动生成")
             save_status = gr.Textbox(label="保存状态", interactive=False)
-        
+
         # 动态显示下一个目的地和日期输入框
         def show_next_dest(text, index):
             if text.strip() and index < MAX_INPUTS - 1:
@@ -812,17 +811,108 @@ with gr.Blocks() as demo:
                 outputs=[current_index, dest_inputs[idx + 1]],
             )
         
-        # 收集所有已填写的目的地和日期并调用多目的地行程规划
+        # --------- 伪流式输出实现 start ---------
+        import threading
+
+        # 用于存储本次流式结果的全局变量
+        from collections import defaultdict
+        stream_results = defaultdict(list)
+        stream_locks = defaultdict(threading.Lock)
+
         def update_travel_plan(place1, date1, *args):
+            """
+            手动实现DataFrame表格的流式输出，确保每次点击提交后读取的是本次生成的新内容。
+            通过延迟等待route_planner.py启动并写入新文件后再开始流式读取。
+            """
             dests = []
             for d in args[:-1]:
                 if d and d.strip():
                     dests.append(d.strip())
             date2_val = args[-1]
             if not dests or not date2_val:
-                return "请至少填写一个目的地和返程日期", None
-            return generate_travel_plan_multi(place1, date1, dests, date2_val)
-        
+                yield "请至少填写一个目的地和返程日期", pd.DataFrame(columns=["日期", "时间", "地点", "活动", "交通"])
+                return
+
+            # 1. 写入GUI输入文件
+            base_dir = Path(__file__).parent.parent.resolve()
+            save_dir = base_dir / "temp" / "travel_plans"
+            save_dir.mkdir(parents=True, exist_ok=True)
+            gui_path = save_dir / "route_planning_GUIoutput.json"
+            llm_path = save_dir / "route_planning_LLMoutput.json"
+
+            gui_plan = {
+                "departure": place1,
+                "departure_date": date1,
+                "return_date": date2_val,
+                "destinations": [{"place": d} for d in dests]
+            }
+            with open(gui_path, "w", encoding="utf-8") as f:
+                json.dump(gui_plan, f, ensure_ascii=False, indent=2)
+
+            # 2. 启动route_planner.py为子进程（异步写入llm_path）
+            route_planner_path = base_dir / "src" / "utils" / "route_planner.py"
+            proc = subprocess.Popen([sys.executable, str(route_planner_path)], cwd=str(save_dir))
+
+            # 3. 等待route_planner.py真正开始写入新文件，避免读取到旧内容
+            headers = ["日期", "时间", "地点", "活动", "交通"]
+            ticket_url = f"https://flights.ctrip.com/international/search/round-{place1}-{dests[0]}-{date1}-{date2_val}"
+            ticket_link = f'<a href="{ticket_url}" target="_blank">点击查看票务信息</a>'
+            yielded_rows = []
+            last_size = 0
+            max_wait = 120  # 最多等待2分钟
+            waited = 0
+
+            # 先yield空表格
+            yield ticket_link, pd.DataFrame([], columns=headers)
+
+            # 先等待llm_path被清空或被重写（即文件内容变为空或被truncate），避免读取到旧内容
+            # 只要文件存在且内容不为空，先truncate
+            if llm_path.exists():
+                try:
+                    with open(llm_path, "w", encoding="utf-8") as f:
+                        f.truncate(0)
+                except Exception:
+                    pass
+
+            # 等待route_planner.py真正开始写入（即文件大小大于0）
+            start_wait = 0
+            while (not llm_path.exists() or os.path.getsize(llm_path) == 0) and start_wait < 10:
+                time.sleep(0.2)
+                start_wait += 0.2
+
+            # 4. 流式读取llm_path，每次yield一个DataFrame
+            while proc.poll() is None or (llm_path.exists() and os.path.getsize(llm_path) > last_size):
+                if llm_path.exists():
+                    with open(str(llm_path), "r", encoding="utf-8") as f:
+                        lines = f.readlines()
+                    new_lines = lines[len(yielded_rows):]
+                    for line in new_lines:
+                        try:
+                            row = json.loads(line)
+                            norm = [
+                                row.get("date") or row.get("日期") or "",
+                                row.get("time") or row.get("时间") or "",
+                                row.get("location") or row.get("地点") or "",
+                                row.get("activity") or row.get("活动") or "",
+                                row.get("transport") or row.get("交通") or "",
+                            ]
+                            yielded_rows.append(norm)
+                            df = pd.DataFrame(yielded_rows, columns=headers)
+                            yield ticket_link, df
+                        except Exception:
+                            continue
+                    last_size = os.path.getsize(llm_path)
+                time.sleep(0.5)
+                waited += 0.5
+                if waited > max_wait:
+                    break
+            # 若无内容，返回空表格
+            if not yielded_rows:
+                df = pd.DataFrame([], columns=headers)
+                yield ticket_link, df
+
+        # --------- 伪流式输出实现 end ---------
+
         submit_btn.click(
             fn=update_travel_plan,
             inputs=[place1, date1] + dest_inputs + [date2],

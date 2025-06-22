@@ -5,7 +5,7 @@
 markdown
 pdfkit
 python-dotenv
-gradio
+gradio>=3.41.0
 numpy
 pillow
 pydub
