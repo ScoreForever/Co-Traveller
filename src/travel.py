@@ -168,7 +168,6 @@ def generate_travel_plan(place1, date1, place2, date2):
     except Exception as e:
         return f"发生错误: {str(e)}", "无法生成旅行规划"
 
-# 新增：支持多目的地和多日期的行程规划
 def generate_travel_plan_multi(place1, date1, dests, date2):
     """
     place1: 出发地
@@ -190,56 +189,62 @@ def generate_travel_plan_multi(place1, date1, dests, date2):
         total_days = (ret_date - dep_date).days + 1
         if total_days > 30:
             return "旅游时间过长，建议不超过30天", "请缩短旅行日期"
-        # 均分天数给每个目的地
-        days_per_dest = total_days // len(dests)
-        extra_days = total_days % len(dests)
-        travel_plan_data = []
-        morning_activities = ["参观", "品尝当地早餐", "参加文化体验活动"]
-        afternoon_activities = ["游览", "购物"]
-        evening_activities = ["体验夜景", "品尝特色晚餐"]
-        cur_date = dep_date
-        day_idx = 1
 
-        for i, dest in enumerate(dests):
-            stay_days = days_per_dest + (1 if i < extra_days else 0)
-            attractions = [f"{dest}景点{j}" for j in range(1, 4)]
-            for _ in range(stay_days):
-                # 上午活动
-                activity_time = "上午"
-                activity_place = random.choice(attractions)
-                activity_action = random.choice(morning_activities)
-                activity_transport = random.choice(["公交", "地铁", "步行", "出租车"])
-                travel_plan_data.append([f"Day{day_idx}（{cur_date.strftime('%Y-%m-%d')}）", activity_time, activity_place, activity_action, activity_transport])
+        # --- 新增：保存GUI输入，调用大模型，读取LLM输出 ---
+        try:
+            import sys, os, json
+            from pathlib import Path
+            import pandas as pd
 
-                # 下午活动
-                activity_time = "下午"
-                activity_place = random.choice(attractions)
-                activity_action = random.choice(afternoon_activities)
-                activity_transport = random.choice(["公交", "地铁", "步行", "出租车"])
-                travel_plan_data.append([f"Day{day_idx}（{cur_date.strftime('%Y-%m-%d')}）", activity_time, activity_place, activity_action, activity_transport])
+            # 保证路径为绝对路径
+            base_dir = Path(__file__).parent.parent.resolve()
+            save_dir = base_dir / "temp" / "travel_plans"
+            save_dir.mkdir(parents=True, exist_ok=True)
+            gui_path = save_dir / "route_planning_GUIoutput.json"
+            llm_path = save_dir / "route_planning_LLMoutput.json"
 
-                # 晚上活动
-                activity_time = "晚上"
-                activity_place = random.choice(attractions)
-                activity_action = random.choice(evening_activities)
-                activity_transport = random.choice(["公交", "地铁", "步行", "出租车"])
-                travel_plan_data.append([f"Day{day_idx}（{cur_date.strftime('%Y-%m-%d')}）", activity_time, activity_place, activity_action, activity_transport])
+            # 保存GUI输入，增加返回日期
+            gui_plan = {
+                "departure": place1,
+                "departure_date": date1,
+                "return_date": date2,
+                "destinations": [{"place": d} for d in dests]
+            }
+            with open(str(gui_path), "w", encoding="utf-8") as f:
+                json.dump(gui_plan, f, ensure_ascii=False, indent=2)
 
-                cur_date += timedelta(days=1)
-                day_idx += 1
+            # 调用route_planner.py（用绝对路径，cwd=save_dir）
+            route_planner_path = base_dir / "src" / "utils" / "route_planner.py"
+            subprocess.run([sys.executable, str(route_planner_path)], cwd=str(save_dir), check=True)
 
-        # 将列表转换为DataFrame
+            # 读取LLM输出
+            if llm_path.exists():
+                with open(str(llm_path), "r", encoding="utf-8") as f:
+                    llm_plan = json.load(f)
+                if isinstance(llm_plan, list) and llm_plan:
+                    headers = ["日期", "时间", "地点", "活动", "交通"]
+                    def norm(row):
+                        return [
+                            row.get("date") or row.get("日期") or "",
+                            row.get("time") or row.get("时间") or "",
+                            row.get("location") or row.get("地点") or "",
+                            row.get("activity") or row.get("活动") or "",
+                            row.get("transport") or row.get("交通") or "",
+                        ]
+                    df = pd.DataFrame([norm(r) for r in llm_plan], columns=headers)
+                    ticket_url = f"https://flights.ctrip.com/international/search/round-{place1}-{dests[0]}-{date1}-{date2}"
+                    ticket_link = f'<a href="{ticket_url}" target="_blank">点击查看票务信息</a>'
+                    return ticket_link, df
+        except Exception as e:
+            # 打印调试信息
+            print("LLM行程生成异常：", e)
+
+        # 如果大模型流程异常或无输出，返回空表格
         headers = ["日期", "时间", "地点", "活动", "交通"]
-        travel_plan_data = pd.DataFrame(travel_plan_data, columns=headers)
-
-        # 生成查票网址
+        df = pd.DataFrame([], columns=headers)
         ticket_url = f"https://flights.ctrip.com/international/search/round-{place1}-{dests[0]}-{date1}-{date2}"
         ticket_link = f'<a href="{ticket_url}" target="_blank">点击查看票务信息</a>'
-
-        return ticket_link, travel_plan_data
-
-    except ValueError:
-        return "日期格式错误，请使用YYYY-MM-DD格式", "请检查输入"
+        return ticket_link, df
     except Exception as e:
         return f"发生错误: {str(e)}", "无法生成旅行规划"
 

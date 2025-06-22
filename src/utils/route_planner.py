@@ -59,7 +59,7 @@ def main():
         f"我将于{departure_date}从{departure}出发，依次前往{dest_str}，{return_date}返程。"
         "请为每个到达城市自动推荐适合的旅行景点，并为整个行程生成详细的每日行程规划。"
         "请输出一个JSON数组，每个元素包含：date, time, location, activity, transport。"
-        "所有键必须为英文，且顺序为date, time, location, activity, transport。"
+        "所有键必须为英文，且顺序为date, time, location, activity, transport。并注意仅仅是键为英文，值必须是中文，因为你的用户是中国人。"
         "请不要输出除JSON以外的内容。"
     )
 
