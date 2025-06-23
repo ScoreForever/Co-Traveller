@@ -26,7 +26,10 @@ from src.utils.rag_helper import load_pdfs_from_folder, build_retriever_from_doc
 load_dotenv()
 from src.amap import set_amap_api_key, process_route, create_map_html, geocode_location, calculate_driving_route  # 补充需要的函数
 
-
+# 活动类型定义
+morning_activities = ["参观", "品尝当地早餐", "参加文化体验活动", "游览自然风光"]
+afternoon_activities = ["游览", "购物", "参观博物馆", "参加户外活动"]
+evening_activities = ["体验夜景", "品尝特色晚餐", "参加当地表演", "散步"]
 
 def load_env(filepath):
     """从.env文件读取环境变量"""
@@ -59,6 +62,10 @@ BAIDU_APP_ID = env_vars.get("BAIDU_APP_ID", "")
 
 SILICON_API_KEY = env_vars.get("SILICON_API_KEY", "")
 X_QW_API_KEY = env_vars.get("X_QW_API_KEY", "")
+
+# 新增：火车票和飞机票API配置
+TRAIN_API_KEY = env_vars.get("TRAIN_API_KEY", "")
+FLIGHT_API_KEY = env_vars.get("FLIGHT_API_KEY", "")
 
 def is_valid_date(date_str):
     """验证日期是否为YYYY-MM-DD格式且在当日或之后"""
@@ -99,33 +106,92 @@ def check_same_city(addresses):
             continue
     return len(city_set) == 1
 
+# 新增：查询火车票班次
+def query_train_tickets(origin, destination, date):
+    """查询指定日期从出发地到目的地的火车班次"""
+    if not TRAIN_API_KEY:
+        return [{"车次": "G101", "出发时间": "08:00", "到达时间": "12:00", "历时": "4小时", "二等座": "¥553", "一等座": "¥933"},
+                {"车次": "G103", "出发时间": "09:00", "到达时间": "13:00", "历时": "4小时", "二等座": "¥553", "一等座": "¥933"},
+                {"车次": "G105", "出发时间": "10:00", "到达时间": "14:00", "历时": "4小时", "二等座": "¥553", "一等座": "¥933"}]
+    
+    # 实际API调用（示例，需替换为真实API）
+    try:
+        url = "https://api.example.com/train/tickets"
+        params = {
+            "key": TRAIN_API_KEY,
+            "origin": origin,
+            "destination": destination,
+            "date": date
+        }
+        response = requests.get(url, params=params)
+        if response.status_code == 200:
+            return response.json().get("trains", [])
+        else:
+            return []
+    except Exception as e:
+        print(f"查询火车票失败: {e}")
+        return []
+
+# 新增：查询飞机票班次
+def query_flight_tickets(origin, destination, date):
+    """查询指定日期从出发地到目的地的飞机班次"""
+    if not FLIGHT_API_KEY:
+        return [{"航班号": "CA1234", "航空公司": "国航", "出发时间": "07:30", "到达时间": "10:30", "历时": "3小时", "经济舱": "¥1200", "商务舱": "¥3500"},
+                {"航班号": "MU2345", "航空公司": "东航", "出发时间": "09:30", "到达时间": "12:30", "历时": "3小时", "经济舱": "¥1100", "商务舱": "¥3200"},
+                {"航班号": "CZ3456", "航空公司": "南航", "出发时间": "13:30", "到达时间": "16:30", "历时": "3小时", "经济舱": "¥1000", "商务舱": "¥2900"}]
+    
+    # 实际API调用（示例，需替换为真实API）
+    try:
+        url = "https://api.example.com/flight/tickets"
+        params = {
+            "key": FLIGHT_API_KEY,
+            "origin": origin,
+            "destination": destination,
+            "date": date
+        }
+        response = requests.get(url, params=params)
+        if response.status_code == 200:
+            return response.json().get("flights", [])
+        else:
+            return []
+    except Exception as e:
+        print(f"查询飞机票失败: {e}")
+        return []
+
 def generate_travel_plan(place1, date1, place2, date2):
     """生成查票网址和旅行规划"""
     try:
         # 验证日期格式和有效性
         if not is_valid_date(date1):
-            return "日期格式错误或日期必须在当日或之后", "请检查出发日期"
+            return "日期格式错误或日期必须在当日或之后", "请检查出发日期", None, None
         if not is_valid_date(date2):
-            return "日期格式错误或日期必须在当日或之后", "请检查返回日期"
+            return "日期格式错误或日期必须在当日或之后", "请检查返回日期", None, None
             
         # 验证返回日期是否晚于出发日期
         dep_date = datetime.strptime(date1, "%Y-%m-%d").date()
         ret_date = datetime.strptime(date2, "%Y-%m-%d").date()
         if ret_date < dep_date:
-            return "返回日期不能早于出发日期", "请检查日期顺序"
+            return "返回日期不能早于出发日期", "请检查日期顺序", None, None
         
         # 计算旅行天数
         days = (ret_date - dep_date).days + 1
         
         # 验证旅行天数不超过30天
         if days > 30:
-            return "旅游时间过长，建议不超过30天", "请缩短旅行日期"
+            return "旅游时间过长，建议不超过30天", "请缩短旅行日期", None, None
         
         # 生成查票网址（示例使用携程API格式，需替换为真实API）
         ticket_url = f"https://flights.ctrip.com/international/search/round-{place1}-{place2}-{date1}-{date2}"
         
         # 创建可点击的HTML链接
-        ticket_link = f'<a href="{ticket_url}" target="_blank">点击查看票务信息</a>'
+        ticket_link = f'<a href="{ticket_url}" target="_blank">点击查看更多票务信息</a>'
+        
+        # 新增：查询火车票和飞机票
+        train_tickets = query_train_tickets(place1, place2, date1)
+        flight_tickets = query_flight_tickets(place1, place2, date1)
+        
+        # 创建票务信息HTML表格
+        tickets_html = generate_tickets_html(train_tickets, flight_tickets)
         
         # 模拟生成旅行计划，格式化为表格数据
         travel_plan_data = []
@@ -161,12 +227,72 @@ def generate_travel_plan(place1, date1, place2, date2):
         headers = ["日期", "时间", "地点", "活动", "交通"]
         travel_plan_data = pd.DataFrame(travel_plan_data, columns=headers)
         
-        return ticket_link, travel_plan_data
+        return ticket_link, travel_plan_data, train_tickets, flight_tickets
     
     except ValueError:
-        return "日期格式错误，请使用YYYY-MM-DD格式", "请检查输入"
+        return "日期格式错误，请使用YYYY-MM-DD格式", "请检查输入", None, None
     except Exception as e:
-        return f"发生错误: {str(e)}", "无法生成旅行规划"
+        return f"发生错误: {str(e)}", "无法生成旅行规划", None, None
+
+# 新增：生成票务信息HTML表格
+def generate_tickets_html(train_tickets, flight_tickets):
+    """生成火车票和飞机票的HTML表格"""
+    html = "<div style='margin-top:20px;'>"
+    
+    # 火车票表格
+    if train_tickets:
+        html += "<h3>火车票班次</h3>"
+        html += "<table class='ticket-table' style='width:100%; border-collapse:collapse; margin-bottom:20px;'>"
+        html += "<tr style='background-color:#f2f2f2;'>"
+        html += "<th style='border:1px solid #ddd; padding:8px; text-align:left;'>车次</th>"
+        html += "<th style='border:1px solid #ddd; padding:8px; text-align:left;'>出发时间</th>"
+        html += "<th style='border:1px solid #ddd; padding:8px; text-align:left;'>到达时间</th>"
+        html += "<th style='border:1px solid #ddd; padding:8px; text-align:left;'>历时</th>"
+        html += "<th style='border:1px solid #ddd; padding:8px; text-align:left;'>二等座</th>"
+        html += "<th style='border:1px solid #ddd; padding:8px; text-align:left;'>一等座</th>"
+        html += "</tr>"
+        
+        for train in train_tickets[:5]:  # 只显示前5条
+            html += "<tr>"
+            html += f"<td style='border:1px solid #ddd; padding:8px;'>{train['车次']}</td>"
+            html += f"<td style='border:1px solid #ddd; padding:8px;'>{train['出发时间']}</td>"
+            html += f"<td style='border:1px solid #ddd; padding:8px;'>{train['到达时间']}</td>"
+            html += f"<td style='border:1px solid #ddd; padding:8px;'>{train['历时']}</td>"
+            html += f"<td style='border:1px solid #ddd; padding:8px;'>{train['二等座']}</td>"
+            html += f"<td style='border:1px solid #ddd; padding:8px;'>{train['一等座']}</td>"
+            html += "</tr>"
+        
+        html += "</table>"
+    
+    # 飞机票表格
+    if flight_tickets:
+        html += "<h3>飞机票班次</h3>"
+        html += "<table class='ticket-table' style='width:100%; border-collapse:collapse;'>"
+        html += "<tr style='background-color:#f2f2f2;'>"
+        html += "<th style='border:1px solid #ddd; padding:8px; text-align:left;'>航班号</th>"
+        html += "<th style='border:1px solid #ddd; padding:8px; text-align:left;'>航空公司</th>"
+        html += "<th style='border:1px solid #ddd; padding:8px; text-align:left;'>出发时间</th>"
+        html += "<th style='border:1px solid #ddd; padding:8px; text-align:left;'>到达时间</th>"
+        html += "<th style='border:1px solid #ddd; padding:8px; text-align:left;'>历时</th>"
+        html += "<th style='border:1px solid #ddd; padding:8px; text-align:left;'>经济舱</th>"
+        html += "<th style='border:1px solid #ddd; padding:8px; text-align:left;'>商务舱</th>"
+        html += "</tr>"
+        
+        for flight in flight_tickets[:5]:  # 只显示前5条
+            html += "<tr>"
+            html += f"<td style='border:1px solid #ddd; padding:8px;'>{flight['航班号']}</td>"
+            html += f"<td style='border:1px solid #ddd; padding:8px;'>{flight['航空公司']}</td>"
+            html += f"<td style='border:1px solid #ddd; padding:8px;'>{flight['出发时间']}</td>"
+            html += f"<td style='border:1px solid #ddd; padding:8px;'>{flight['到达时间']}</td>"
+            html += f"<td style='border:1px solid #ddd; padding:8px;'>{flight['历时']}</td>"
+            html += f"<td style='border:1px solid #ddd; padding:8px;'>{flight['经济舱']}</td>"
+            html += f"<td style='border:1px solid #ddd; padding:8px;'>{flight['商务舱']}</td>"
+            html += "</tr>"
+        
+        html += "</table>"
+    
+    html += "</div>"
+    return html
 
 def generate_travel_plan_multi(place1, date1, dests, date2):
     """
@@ -174,22 +300,22 @@ def generate_travel_plan_multi(place1, date1, dests, date2):
     """
     try:
         if not is_valid_date(date1):
-            yield "日期格式错误或日期必须在当日或之后", None
+            yield "日期格式错误或日期必须在当日或之后", None, None, None
             return
         if not is_valid_date(date2):
-            yield "日期格式错误或日期必须在当日或之后", None
+            yield "日期格式错误或日期必须在当日或之后", None, None, None
             return
         if not dests:
-            yield "请至少填写一个目的地", None
+            yield "请至少填写一个目的地", None, None, None
             return
         dep_date = datetime.strptime(date1, "%Y-%m-%d").date()
         ret_date = datetime.strptime(date2, "%Y-%m-%d").date()
         if ret_date < dep_date:
-            yield "返回日期不能早于出发日期", None
+            yield "返回日期不能早于出发日期", None, None, None
             return
         total_days = (ret_date - dep_date).days + 1
         if total_days > 30:
-            yield "旅游时间过长，建议不超过30天", None
+            yield "旅游时间过长，建议不超过30天", None, None, None
             return
 
         # --- 保存GUI输入，调用大模型，读取LLM输出 ---
@@ -225,6 +351,14 @@ def generate_travel_plan_multi(place1, date1, dests, date2):
         last_size = 0
         max_wait = 120  # 最多等待2分钟
         waited = 0
+        
+        # 新增：初始化票务信息
+        train_tickets = []
+        flight_tickets = []
+        
+        # 先yield初始状态
+        yield ticket_link, pd.DataFrame([], columns=headers), train_tickets, flight_tickets
+
         while proc.poll() is None or (llm_path.exists() and os.path.getsize(llm_path) > last_size):
             if llm_path.exists():
                 with open(str(llm_path), "r", encoding="utf-8") as f:
@@ -242,7 +376,13 @@ def generate_travel_plan_multi(place1, date1, dests, date2):
                         ]
                         yielded_rows.append(norm)
                         df = pd.DataFrame(yielded_rows, columns=headers)
-                        yield ticket_link, df
+                        
+                        # 新增：当收集到一定数量的行程时，查询票务信息
+                        if len(yielded_rows) >= 3 and not train_tickets and not flight_tickets:
+                            train_tickets = query_train_tickets(place1, dests[0], date1)
+                            flight_tickets = query_flight_tickets(place1, dests[0], date1)
+                        
+                        yield ticket_link, df, train_tickets, flight_tickets
                     except Exception:
                         continue
                 last_size = os.path.getsize(llm_path)
@@ -250,12 +390,13 @@ def generate_travel_plan_multi(place1, date1, dests, date2):
             waited += 0.5
             if waited > max_wait:
                 break
+        
         # 若无内容，返回空表格
         if not yielded_rows:
             df = pd.DataFrame([], columns=headers)
-            yield ticket_link, df
+            yield ticket_link, df, train_tickets, flight_tickets
     except Exception as e:
-        yield f"发生错误: {str(e)}", None
+        yield f"发生错误: {str(e)}", None, None, None
 
 # 新增：支持多目的地和多日期的行程规划（改进版）
 def generate_travel_plan_multi_v2(place1, date1, dests, date2):
@@ -267,18 +408,18 @@ def generate_travel_plan_multi_v2(place1, date1, dests, date2):
     """
     try:
         if not is_valid_date(date1):
-            return "日期格式错误或日期必须在当日或之后", "请检查出发日期"
+            return "日期格式错误或日期必须在当日或之后", "请检查出发日期", None, None
         if not is_valid_date(date2):
-            return "日期格式错误或日期必须在当日或之后", "请检查返回日期"
+            return "日期格式错误或日期必须在当日或之后", "请检查返回日期", None, None
         if not dests:
-            return "请至少填写一个目的地", "请检查输入"
+            return "请至少填写一个目的地", "请检查输入", None, None
         dep_date = datetime.strptime(date1, "%Y-%m-%d").date()
         ret_date = datetime.strptime(date2, "%Y-%m-%d").date()
         if ret_date < dep_date:
-            return "返回日期不能早于出发日期", "请检查日期顺序"
+            return "返回日期不能早于出发日期", "请检查日期顺序", None, None
         total_days = (ret_date - dep_date).days + 1
         if total_days > 30:
-            return "旅游时间过长，建议不超过30天", "请缩短旅行日期"
+            return "旅游时间过长，建议不超过30天", "请缩短旅行日期", None, None
 
         # --- 新增：保存GUI输入，调用大模型，读取LLM输出 ---
         try:
@@ -324,7 +465,12 @@ def generate_travel_plan_multi_v2(place1, date1, dests, date2):
                     df = pd.DataFrame([norm(r) for r in llm_plan], columns=headers)
                     ticket_url = f"https://flights.ctrip.com/international/search/round-{place1}-{dests[0]}-{date1}-{date2}"
                     ticket_link = f'<a href="{ticket_url}" target="_blank">点击查看票务信息</a>'
-                    return ticket_link, df
+                    
+                    # 新增：查询票务信息
+                    train_tickets = query_train_tickets(place1, dests[0], date1)
+                    flight_tickets = query_flight_tickets(place1, dests[0], date1)
+                    
+                    return ticket_link, df, train_tickets, flight_tickets
         except Exception as e:
             # 打印调试信息
             print("LLM行程生成异常：", e)
@@ -338,6 +484,11 @@ def generate_travel_plan_multi_v2(place1, date1, dests, date2):
         # 均分天数给每个目的地
         days_per_dest = total_days // len(dests)
         extra_days = total_days % len(dests)
+        all_attractions = []
+        travel_plan_data = []
+        day_idx = 1
+        cur_date = dep_date
+
         for i, dest in enumerate(dests):
             stay_days = days_per_dest + (1 if i < extra_days else 0)
             attractions = [f"{dest}景点{j}" for j in range(1, 4)]
@@ -368,67 +519,15 @@ def generate_travel_plan_multi_v2(place1, date1, dests, date2):
                 day_idx += 1
 
         # 将列表转换为DataFrame
-        headers = ["日期", "时间", "地点", "活动", "交通"]
         travel_plan_data = pd.DataFrame(travel_plan_data, columns=headers)
         
-        # 使用 amap.py 中的函数处理地址和生成地图
+        # 新增：查询票务信息
+        train_tickets = query_train_tickets(place1, dests[0], date1)
+        flight_tickets = query_flight_tickets(place1, dests[0], date1)
         
-        # 提取景点中的地址信息
-        addresses = []
-        for attraction in all_attractions:
-            addr_list = amap.extract_addresses_from_text(attraction)
-            if addr_list:
-                # 取第一个地址
-                addresses.append(addr_list[0])
-
-        if not addresses:
-            return ticket_link, travel_plan_data, "未找到有效地址，无法生成地图"
-
-        # 检查所有地址是否在同一个市
-        if not check_same_city(addresses):
-            return ticket_link, travel_plan_data, "景点不在同一个市，请重新选择目的地"
-
-        # 获取地址的经纬度
-        locations = []
-        for addr_info in addresses:
-            lng, lat, formatted_addr, address_info = amap.geocode_address(addr_info)
-            if lng and lat:
-                locations.append((lng, lat, formatted_addr, address_info))
-
-        if not locations:
-            return ticket_link, travel_plan_data, "所有地址都无法转换为有效坐标，无法生成地图"
-
-        # 计算路线
-        routes = []
-        if len(locations) > 1:
-            for i in range(len(locations) - 1):
-                start_lng, start_lat, _, _ = locations[i]
-                end_lng, end_lat, _, _ = locations[i + 1]
-                route = amap.calculate_driving_route(start_lng, start_lat, end_lng, end_lat)  # 正确函数
-                if route.get("success"):
-                    routes.append(route)
-
-        
-        # 构造符合amap.create_map_html要求的参数（需包含polyline、origin、destination等字段）
-        # 示例：取第一条路线的polyline作为地图数据
-        if routes:
-            result_for_map = {
-                "success": True,
-                "polyline": routes[0].get("polyline"),
-                "origin": f"{start_lng},{start_lat}",
-                "destination": f"{end_lng},{end_lat}",
-                "origin_name": "起点",
-                "destination_name": "终点",
-                "distance": routes[0].get("distance", 0),
-                "duration": routes[0].get("duration", 0)
-            }
-            map_html = amap.create_map_html(result_for_map)  # 正确函数
-        else:
-            map_html = "<div>无有效路线数据</div>"
-
-        return ticket_link, travel_plan_data, map_html
+        return ticket_link, travel_plan_data, train_tickets, flight_tickets
     except Exception as e:
-        return f"发生错误: {str(e)}", "无法生成旅行规划"
+        return f"发生错误: {str(e)}", "无法生成旅行规划", None, None
 
 def generate_city_map(place, date=None):
     """使用高德静态地图API生成城市或景点地图"""
@@ -652,6 +751,7 @@ def delete_travel_plan(filename):
         return "旅行计划已删除", list_saved_plans()
     except Exception as e:
         return f"删除失败: {str(e)}", list_saved_plans()
+
 #新增函数
 def generate_route_map(places_str, transport, optimize, show_details):
     """生成路线地图和路线信息"""
@@ -782,8 +882,11 @@ with gr.Blocks() as demo:
             clear_btn = gr.Button("清除")
             submit_btn = gr.Button("提交", variant="primary")
 
-        # 只保留一个“旅行规划”表格（去除多余的gr.Row）
+        # 查票结果展示
         ticket_url_output = gr.HTML(label="查票网址")
+        tickets_output = gr.HTML(label="票务信息")
+        
+        # 旅行规划表格
         travel_plan_output = gr.Dataframe(
             headers=["日期", "时间", "地点", "活动", "交通"],
             label="旅行规划",
@@ -830,7 +933,7 @@ with gr.Blocks() as demo:
                     dests.append(d.strip())
             date2_val = args[-1]
             if not dests or not date2_val:
-                yield "请至少填写一个目的地和返程日期", pd.DataFrame(columns=["日期", "时间", "地点", "活动", "交通"])
+                yield "请至少填写一个目的地和返程日期", pd.DataFrame(columns=["日期", "时间", "地点", "活动", "交通"]), [], []
                 return
 
             # 1. 写入GUI输入文件
@@ -843,455 +946,350 @@ with gr.Blocks() as demo:
             gui_plan = {
                 "departure": place1,
                 "departure_date": date1,
-                "return_date": date2_val,
+                                "return_date": date2_val,
                 "destinations": [{"place": d} for d in dests]
             }
-            with open(gui_path, "w", encoding="utf-8") as f:
+            with open(str(gui_path), "w", encoding="utf-8") as f:
                 json.dump(gui_plan, f, ensure_ascii=False, indent=2)
 
-            # 2. 启动route_planner.py为子进程（异步写入llm_path）
+            # 2. 启动route_planner.py作为子进程
+            import subprocess
+            import sys
             route_planner_path = base_dir / "src" / "utils" / "route_planner.py"
-            proc = subprocess.Popen([sys.executable, str(route_planner_path)], cwd=str(save_dir))
-
-            # 3. 等待route_planner.py真正开始写入新文件，避免读取到旧内容
-            headers = ["日期", "时间", "地点", "活动", "交通"]
-            ticket_url = f"https://flights.ctrip.com/international/search/round-{place1}-{dests[0]}-{date1}-{date2_val}"
-            ticket_link = f'<a href="{ticket_url}" target="_blank">点击查看票务信息</a>'
-            yielded_rows = []
-            last_size = 0
-            max_wait = 120  # 最多等待2分钟
-            waited = 0
-
-            # 先yield空表格
-            yield ticket_link, pd.DataFrame([], columns=headers)
-
-            # 先等待llm_path被清空或被重写（即文件内容变为空或被truncate），避免读取到旧内容
-            # 只要文件存在且内容不为空，先truncate
-            if llm_path.exists():
-                try:
-                    with open(llm_path, "w", encoding="utf-8") as f:
-                        f.truncate(0)
-                except Exception:
-                    pass
-
-            # 等待route_planner.py真正开始写入（即文件大小大于0）
-            start_wait = 0
-            while (not llm_path.exists() or os.path.getsize(llm_path) == 0) and start_wait < 10:
-                time.sleep(0.2)
-                start_wait += 0.2
-
-            # 4. 流式读取llm_path，每次yield一个DataFrame
-            while proc.poll() is None or (llm_path.exists() and os.path.getsize(llm_path) > last_size):
+            try:
+                # 先删除可能存在的旧输出文件
                 if llm_path.exists():
-                    with open(str(llm_path), "r", encoding="utf-8") as f:
-                        lines = f.readlines()
-                    new_lines = lines[len(yielded_rows):]
-                    for line in new_lines:
+                    llm_path.unlink()
+                
+                # 启动子进程
+                proc = subprocess.Popen(
+                    [sys.executable, str(route_planner_path)],
+                    cwd=str(save_dir),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+                
+                # 3. 流式读取输出文件
+                headers = ["日期", "时间", "地点", "活动", "交通"]
+                ticket_url = f"https://flights.ctrip.com/international/search/round-{place1}-{dests[0]}-{date1}-{date2_val}"
+                ticket_link = f'<a href="{ticket_url}" target="_blank">点击查看票务信息</a>'
+                
+                # 初始化票务信息
+                train_tickets = []
+                flight_tickets = []
+                
+                # 先yield初始状态
+                yield ticket_link, pd.DataFrame([], columns=headers), train_tickets, flight_tickets
+                
+                # 等待文件创建并开始读取
+                max_wait = 30  # 最多等待30秒
+                waited = 0
+                while not llm_path.exists() and waited < max_wait:
+                    time.sleep(0.5)
+                    waited += 0.5
+                
+                # 读取文件内容
+                prev_size = 0
+                max_attempts = 60  # 最多尝试60次，约30秒
+                attempts = 0
+                
+                while proc.poll() is None or (llm_path.exists() and os.path.getsize(llm_path) > prev_size):
+                    if llm_path.exists():
                         try:
-                            row = json.loads(line)
-                            norm = [
-                                row.get("date") or row.get("日期") or "",
-                                row.get("time") or row.get("时间") or "",
-                                row.get("location") or row.get("地点") or "",
-                                row.get("activity") or row.get("活动") or "",
-                                row.get("transport") or row.get("交通") or "",
-                            ]
-                            yielded_rows.append(norm)
-                            df = pd.DataFrame(yielded_rows, columns=headers)
-                            yield ticket_link, df
-                        except Exception:
-                            continue
-                    last_size = os.path.getsize(llm_path)
-                time.sleep(0.5)
-                waited += 0.5
-                if waited > max_wait:
-                    break
-            # 若无内容，返回空表格
-            if not yielded_rows:
-                df = pd.DataFrame([], columns=headers)
-                yield ticket_link, df
-
+                            with open(str(llm_path), "r", encoding="utf-8") as f:
+                                content = f.read()
+                            
+                            # 解析JSONL内容
+                            lines = content.strip().split('\n')
+                            if lines and lines[-1].strip():
+                                try:
+                                    data = []
+                                    for line in lines:
+                                        if line.strip():
+                                            data.append(json.loads(line))
+                                    
+                                    if data:
+                                        # 转换为DataFrame
+                                        df = pd.DataFrame(data)
+                                        
+                                        # 标准化列名
+                                        if not df.empty:
+                                            if "date" in df.columns:
+                                                df = df.rename(columns={"date": "日期"})
+                                            if "time" in df.columns:
+                                                df = df.rename(columns={"time": "时间"})
+                                            if "location" in df.columns:
+                                                df = df.rename(columns={"location": "地点"})
+                                            if "activity" in df.columns:
+                                                df = df.rename(columns={"activity": "活动"})
+                                            if "transport" in df.columns:
+                                                df = df.rename(columns={"transport": "交通"})
+                                            
+                                            # 确保所有必要的列都存在
+                                            for col in headers:
+                                                if col not in df.columns:
+                                                    df[col] = ""
+                                            
+                                            # 按日期和时间排序
+                                            if "日期" in df.columns and "时间" in df.columns:
+                                                # 处理日期格式
+                                                def parse_date(date_str):
+                                                    try:
+                                                        return datetime.strptime(date_str, "%Y-%m-%d")
+                                                    except:
+                                                        return datetime.min
+                                                
+                                                df['_date'] = df['日期'].apply(parse_date)
+                                                df = df.sort_values(by=['_date', '时间'])
+                                                df = df.drop('_date', axis=1)
+                                            
+                                            # 新增：当收集到一定数量的行程时，查询票务信息
+                                            if len(df) >= 3 and not train_tickets and not flight_tickets:
+                                                train_tickets = query_train_tickets(place1, dests[0], date1)
+                                                flight_tickets = query_flight_tickets(place1, dests[0], date1)
+                                            
+                                            yield ticket_link, df[headers], train_tickets, flight_tickets
+                                except json.JSONDecodeError as e:
+                                    print(f"JSON解析错误: {e}")
+                            
+                            prev_size = os.path.getsize(llm_path)
+                        except Exception as e:
+                            print(f"读取文件错误: {e}")
+                    
+                    time.sleep(0.5)
+                    attempts += 1
+                    if attempts > max_attempts:
+                        break
+                
+                # 最后检查一次
+                if llm_path.exists() and os.path.getsize(llm_path) > 0:
+                    try:
+                        with open(str(llm_path), "r", encoding="utf-8") as f:
+                            content = f.read()
+                        
+                        lines = content.strip().split('\n')
+                        data = []
+                        for line in lines:
+                            if line.strip():
+                                data.append(json.loads(line))
+                        
+                        if data:
+                            df = pd.DataFrame(data)
+                            
+                            # 标准化列名
+                            if not df.empty:
+                                if "date" in df.columns:
+                                    df = df.rename(columns={"date": "日期"})
+                                if "time" in df.columns:
+                                    df = df.rename(columns={"time": "时间"})
+                                if "location" in df.columns:
+                                    df = df.rename(columns={"location": "地点"})
+                                if "activity" in df.columns:
+                                    df = df.rename(columns={"activity": "活动"})
+                                if "transport" in df.columns:
+                                    df = df.rename(columns={"transport": "交通"})
+                                
+                                # 确保所有必要的列都存在
+                                for col in headers:
+                                    if col not in df.columns:
+                                        df[col] = ""
+                                
+                                # 按日期和时间排序
+                                if "日期" in df.columns and "时间" in df.columns:
+                                    df['_date'] = df['日期'].apply(parse_date)
+                                    df = df.sort_values(by=['_date', '时间'])
+                                    df = df.drop('_date', axis=1)
+                                
+                                yield ticket_link, df[headers], train_tickets, flight_tickets
+                    except Exception as e:
+                        print(f"最后读取文件错误: {e}")
+                
+                # 如果子进程还在运行，等待它结束
+                if proc.poll() is None:
+                    proc.wait()
+                
+                # 检查是否有错误输出
+                if proc.returncode != 0:
+                    try:
+                        stderr = proc.stderr.read().decode('utf-8')
+                        print(f"子进程错误: {stderr}")
+                    except:
+                        pass
+            except Exception as e:
+                print(f"生成行程计划错误: {e}")
+                yield f"生成行程计划错误: {str(e)}", pd.DataFrame(columns=headers), [], []
+        
         # --------- 伪流式输出实现 end ---------
 
+        # 提交按钮事件
         submit_btn.click(
-            fn=update_travel_plan,
+            update_travel_plan,
             inputs=[place1, date1] + dest_inputs + [date2],
-            outputs=[ticket_url_output, travel_plan_output]
+            outputs=[ticket_url_output, travel_plan_output, tickets_output, save_status]
         )
+
+        # 清除按钮事件
+        def clear_all():
+            return (
+                "", "", *([gr.Textbox.update(value="", visible=i == 0)] for i in range(MAX_INPUTS)), 
+                "", "", pd.DataFrame(columns=["日期", "时间", "地点", "活动", "交通"]), 
+                0, "", ""
+            )
         
         clear_btn.click(
-            fn=lambda: [None, None] + [None]*MAX_INPUTS + [None, None, None, None],
-            inputs=[],
-            outputs=[place1, date1] + dest_inputs + [date2, ticket_url_output, travel_plan_output, save_status]
+            clear_all,
+            outputs=[place1, date1] + dest_inputs + [date2, ticket_url_output, travel_plan_output, current_index, tickets_output, save_status]
         )
-        
+
+        # 保存按钮事件
         save_btn.click(
-            fn=lambda p1, d1, *args: save_travel_plan(
-                p1, d1, args[0] if args[0] else "", args[-2] if len(args) > 1 else "", args[-3], args[-4], args[-1]
+            lambda p1, d1, *args: save_travel_plan(
+                p1, d1, 
+                args[0] if args and args[0] else "目的地", 
+                args[-2] if args and len(args) > 1 else "",
+                args[-3] if args and len(args) > 2 else "",
+                args[-4] if args and len(args) > 3 else pd.DataFrame(),
+                args[-1] if args and len(args) > 4 else None
             ),
             inputs=[place1, date1] + dest_inputs + [date2, ticket_url_output, travel_plan_output, filename_input],
             outputs=[save_status]
         )
-    
-    # 语音输入Tab
-    with gr.Tab("语音输入"):    
-        gr.Markdown("### 🗣️ 语音与智能体对话")
-        chat_state = gr.State([])
-    
+
+    # 地图导航Tab
+    with gr.Tab("地图导航"):
+        gr.Markdown("### 输入多个景点或地址，获取最佳路线规划和地图导航")
         with gr.Row():
             with gr.Column():
-                audio_input = gr.Audio(label="语音输入", type="filepath")
-                stt_btn = gr.Button("开始识别", variant="primary")
-                clear_btn = gr.Button("清空历史")
-        
-            with gr.Column():
-                chatbot = gr.Chatbot(label="旅行助手", type="messages", height=600)
-    
-        def process_speech(audio_path, chat_history, api_key):
-            if not audio_path:
-                return "请先上传语音文件", chat_history
-            text = speech_to_text(audio_path, api_key)
-            return chat_with_agent(text, chat_history)
-    
-        stt_btn.click(
-            fn=process_speech,
-            inputs=[audio_input, chat_state, gr.Textbox(visible=False, value=BAIDU_API_KEY)],
-            outputs=[gr.Textbox(visible=False), chatbot]
-        )
-    
-        clear_btn.click(
-            fn=lambda: ([], []),
-            outputs=[chat_state, chatbot]
-        )
-    # 新增：路线规划标签页
-    
-    with gr.Tab("🗺️ 路线规划"):
-        gr.Markdown("# 🗺️ 高德地图路线规划")
-        gr.Markdown("输入起点和终点的位置名称（如：北京天安门、上海东方明珠），自动计算最佳驾车路线")
-        
-        with gr.Row():
-            with gr.Column(scale=1):
-                with gr.Group():
-                    gr.Markdown("### 📍 起点位置")
-                    start_location = gr.Textbox(
-                        label="起点名称", 
-                        placeholder="例如：北京天安门",
-                        value="北京天安门"
-                    )
-                
-                with gr.Group():
-                    gr.Markdown("### 📍 终点位置")
-                    end_location = gr.Textbox(
-                        label="终点名称", 
-                        placeholder="例如：北京颐和园",
-                        value="北京颐和园"
-                    )
-                
-                submit_btn = gr.Button("🚗 规划路线", variant="primary")
-                
-                gr.Examples(
-                    examples=[
-                        ["北京天安门", "北京颐和园"],
-                        ["上海外滩", "上海东方明珠"],
-                        ["广州塔", "广州白云机场"]
-                    ],
-                    inputs=[start_location, end_location],
-                    label="示例路线"
+                places_input = gr.Textbox(
+                    label="景点或地址（用逗号分隔）",
+                    placeholder="例如：故宫,天安门广场,颐和园,八达岭长城"
                 )
-            
-            with gr.Column(scale=2):
-                with gr.Group():
-                    gr.Markdown("### 📊 路线摘要")
-                    summary = gr.Textbox(label="路线信息", lines=4, interactive=False)
-                
-                with gr.Group():
-                    gr.Markdown("### 🗺️ 路线地图")
-                    map_display = gr.HTML(
-                        label="路线可视化",
-                        value="<div style='min-height:400px; display:flex; align-items:center; justify-content:center; background:#f0f0f0; border-radius:10px;'>等待路线规划...</div>"
-                    )
-                
-                with gr.Group():
-                    gr.Markdown("### 🚥 详细路线指引")
-                    step_instructions = gr.Textbox(label="导航步骤", lines=8, interactive=False)
+                transport_mode = gr.Radio(
+                    ["驾车", "公交", "步行", "骑行"],
+                    label="出行方式",
+                    value="驾车"
+                )
+                optimize_route = gr.Checkbox(label="优化路线顺序", value=True)
+                show_details = gr.Checkbox(label="显示路线详情", value=True)
+            with gr.Column():
+                map_output = gr.HTML(label="路线地图")
+                route_info = gr.Textbox(label="路线信息", lines=10, interactive=False)
         
-        # 设置事件处理（注意：需确保process_route函数在当前作用域可用）
-        submit_btn.click(
-            fn=process_route,
-            inputs=[start_location, end_location],
-            outputs=[summary, map_display, step_instructions]
+        with gr.Row():
+            clear_map_btn = gr.Button("清除")
+            generate_map_btn = gr.Button("生成路线", variant="primary")
+        
+        generate_map_btn.click(
+            generate_route_map,
+            inputs=[places_input, transport_mode, optimize_route, show_details],
+            outputs=[map_output, route_info]
         )
-    # 天气查询Tab
-    with gr.Tab("🌦️ 地点天气查询"):
-        gr.Markdown("### 输入地点，查看未来3天天气图标、描述、生活指数和地图")
-
-        with gr.Row():
-            query_place = gr.Textbox(label="输入地点", placeholder="例如：广州塔")
-            weather_btn = gr.Button("查询天气", variant="primary")
-            clear_weather_btn = gr.Button("清除")
-
-        with gr.Row():
-            icon_html_output = gr.HTML(label="天气图标")
         
-        with gr.Row():
-            weather_output = gr.Textbox(label="天气信息", lines=10, interactive=False)
-
-        with gr.Row():
-            indices_output = gr.HTML(label="生活指数")
-
-        with gr.Row():
-            map_image_output = gr.Image(label="地图", height=400)
-            map_caption_output = gr.Textbox(label="地图说明", interactive=False)
-
-        def query_weather_full(place):
-            if not place.strip():
-                return "", "请输入地点", "", None, ""
-
-            # 使用amap模块进行地理编码
-            poi_info = amap.search_poi(place)
-            if not poi_info:
-                poi_info = {'address': place}
-                
-            lng, lat, detail, _ = amap.geocode_address(poi_info)
-            if not lng or not lat:
-                return "", f"无法识别地点：{place}", "", None, ""
-
-            location = f"{lng},{lat}"
-            headers = {
-                "X-QW-Api-Key": X_QW_API_KEY
-            }
-
-            # 天气图标和文本描述
-            weather_url = "https://me3md84kpk.re.qweatherapi.com/v7/weather/3d"
-            icon_html = ""
-            try:
-                weather_resp = requests.get(weather_url, headers=headers, params={"location": location})
-                weather_data = weather_resp.json()
-                weather_summary = ""
-                if weather_resp.status_code == 200 and weather_data.get("code") == "200":
-                    daily = weather_data.get("daily", [])
-                    icon_html += '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/qweather-icons@1.6.0/font/qweather-icons.css">\n'
-                    icon_html += '<div style="display:flex;justify-content:space-around;font-size:48px;">'
-                    weather_summary = f"📍 地点：{detail}\n"
-                    for d in daily:
-                        icon = d.get("iconDay", "999")
-                        fxDate = d['fxDate']
-                        desc = d['textDay']
-                        tempMin = d['tempMin']
-                        tempMax = d['tempMax']
-                        wind = d['windDirDay']
-                        icon_html += f'''
-                            <div style="text-align:center;">
-                                <div><i class="qi-{icon}"></i></div>
-                                <div style="font-size:14px;">{fxDate}</div>
-                                <div style="font-size:14px;">{desc}</div>
-                            </div>
-                        '''
-                        weather_summary += f"\n📅 {fxDate} - {desc}，{tempMin}℃~{tempMax}℃，风向：{wind}"
-                    icon_html += "</div>"
-                else:
-                    weather_summary = f"天气查询失败：{weather_data.get('code')}"
-            except Exception as e:
-                weather_summary = f"天气请求错误：{str(e)}"
-
-            # 生活指数
-            indices_url = "https://me3md84kpk.re.qweatherapi.com/v7/indices/3d"
-            try:
-                indices_resp = requests.get(indices_url, headers=headers, params={"location": location, "type": "1,2,3,5,6,9,14"})
-                indices_data = indices_resp.json()
-
-                indices_summary = '''
-                <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-                <div style="font-size:15px;line-height:1.8;">
-                '''
-
-                fa_icons = {
-                    "1": "fa-person-running",     # 运动
-                    "2": "fa-person-hiking",      # 徒步/洗车
-                    "3": "fa-shirt",              # 穿衣
-                    "5": "fa-sun",                # 紫外线
-                    "6": "fa-car",                # 洗车
-                    "9": "fa-head-side-cough",    # 感冒
-                    "14": "fa-smog"               # 晾晒/空气扩散
-                }
-
-                level_colors = {
-                    "适宜": "#4CAF50",
-                    "较适宜": "#8BC34A",
-                    "极适宜": "#43A047",
-                    "较不宜": "#B0BEC5",
-                    "较强": "#FF9800",
-                    "强": "#FF5722",
-                    "很强": "#F44336",
-                    "炎热": "#F4511E",
-                    "不适宜": "#9E9E9E",
-                    "较弱": "#90CAF9",
-                    "弱": "#42A5F5",
-                    "中等": "#FFC107",
-                    "差": "#BDBDBD",
-                    "少发": "#AED581"
-                }
-
-                from collections import defaultdict
-                date_groups = defaultdict(list)
-                for item in indices_data.get("daily", []):
-                    date_groups[item["date"]].append(item)
-
-                for date in sorted(date_groups.keys()):
-                    indices_summary += f"<h4 style='margin-top:1em;'>📅 {date}</h4><ul style='list-style:none;padding-left:0;'>"
-                    for item in date_groups[date]:
-                        icon_class = fa_icons.get(item["type"], "fa-circle-info")
-                        level = item["category"]
-                        level_color = level_colors.get(level, "#607D8B")
-                        indices_summary += f'''
-                        <li style="margin-bottom:6px;">
-                            <i class="fas {icon_class}" style="margin-right:8px;color:{level_color};"></i>
-                            <b>{item["name"]}</b>（<span style="color:{level_color};font-weight:bold;">{level}</span>）：
-                            {item["text"]}
-                        </li>
-                        '''
-                    indices_summary += "</ul>"
-                indices_summary += "</div>"
-
-            except Exception as e:
-                indices_summary = f"<div>指数请求错误：{str(e)}</div>"
-
-            # 地图显示
-            try:
-                static_map_url = f"https://restapi.amap.com/v3/staticmap?key={AMAP_API_KEY}&location={lng},{lat}&zoom=10&size=600*400&markers=mid,,A:{lng},{lat}"
-                map_resp = requests.get(static_map_url)
-                if map_resp.status_code == 200:
-                    map_img = Image.open(io.BytesIO(map_resp.content))
-                    map_caption = f"{detail} 地图"
-                else:
-                    map_img = None
-                    map_caption = f"地图加载失败：{map_resp.status_code}"
-            except Exception as e:
-                map_img = None
-                map_caption = f"地图加载错误：{str(e)}"
-
-            return icon_html, weather_summary, indices_summary, map_img, map_caption
-
-        weather_btn.click(
-            fn=query_weather_full,
-            inputs=[query_place],
-            outputs=[icon_html_output, weather_output, indices_output, map_image_output, map_caption_output]
+        clear_map_btn.click(
+            lambda: ("", "", ""),
+            outputs=[places_input, map_output, route_info]
         )
 
-        clear_weather_btn.click(
-            fn=lambda: ["", "", "", None, ""],
-            inputs=[],
-            outputs=[icon_html_output, weather_output, indices_output, map_image_output, map_caption_output]
-        )
-    #行程历史管理Tab
-    with gr.Tab("行程历史管理"):
-        gr.Markdown("### 已保存的旅行计划")
-        
+    # 保存的计划Tab
+    with gr.Tab("我的旅行计划"):
+        gr.Markdown("### 查看、加载和管理已保存的旅行计划")
         with gr.Row():
-            history_table = gr.Dataframe(
-                headers=["文件名", "出发地", "目的地", "出发日期", "返回日期", "保存时间", "摘要"],
-                label="历史行程",
-                interactive=False
-            )
+            with gr.Column():
+                plans_list = gr.Dropdown(
+                    choices=[],
+                    label="已保存的计划",
+                    interactive=True,
+                    multiselect=False
+                )
+                load_btn = gr.Button("📖 加载计划")
+                delete_btn = gr.Button("🗑️ 删除计划")
+            with gr.Column():
+                loaded_plan_info = gr.Textbox(label="计划信息", lines=5, interactive=False)
+                loaded_ticket_url = gr.HTML(label="查票链接")
+                loaded_travel_plan = gr.Dataframe(
+                    headers=["日期", "时间", "地点", "活动", "交通"],
+                    label="旅行规划",
+                    interactive=False
+                )
         
-        with gr.Row():
-            with gr.Column(scale=1):
-                file_selector = gr.Dropdown(label="选择行程")
-                load_btn = gr.Button("加载行程")
-                delete_btn = gr.Button("删除行程")
-            with gr.Column(scale=2):
-                status_msg = gr.Textbox(label="操作状态", interactive=False)
-        
-        # 更新历史表格和文件选择器
-        def update_history_table():
+        # 加载已保存的计划列表
+        def update_plans_list():
             plans = list_saved_plans()
-            if not plans:
-                return pd.DataFrame(columns=["文件名", "出发地", "目的地", "出发日期", "返回日期", "保存时间", "摘要"]), []
-            df = pd.DataFrame(plans)
-            return df, df["filename"].tolist()
+            choices = [f"{p['filename']} | {p['place1']} → {p['place2']} | {p['date1']} - {p['date2']}" for p in plans]
+            return gr.Dropdown.update(choices=choices)
         
-        # 初始化时加载历史行程
-        demo.load(
-            fn=update_history_table,
-            outputs=[history_table, file_selector]
-        )
+        # 页面加载时更新计划列表
+        demo.load(update_plans_list, outputs=plans_list)
         
-        # 加载行程
+        # 加载按钮事件
         load_btn.click(
-            fn=lambda filename: load_travel_plan(filename) if filename else (None, None, None, None, None, None, "请先选择一个计划"),
-            inputs=[file_selector],
-            outputs=[place1, date1, dest_inputs[0], date2, ticket_url_output, travel_plan_output, status_msg]
-        ).then(
-            fn=update_history_table,
-            outputs=[history_table, file_selector]
+            lambda filename: load_travel_plan(filename.split(" | ")[0] if filename else ""),
+            inputs=[plans_list],
+            outputs=[place1, date1, dest_inputs[0], date2, loaded_ticket_url, loaded_travel_plan, loaded_plan_info]
         )
         
-        # 删除行程
+        # 删除按钮事件
         delete_btn.click(
-            fn=lambda filename: delete_travel_plan(filename) if filename else ("请先选择一个计划", []),
-            inputs=[file_selector],
-            outputs=[status_msg, history_table]
+            lambda filename: delete_travel_plan(filename.split(" | ")[0] if filename else ""),
+            inputs=[plans_list],
+            outputs=[loaded_plan_info, plans_list]
         ).then(
-            fn=update_history_table,
-            outputs=[file_selector]
+            update_plans_list,
+            outputs=plans_list
         )
-    def load_env(filepath):
-        env = {}
-        if os.path.exists(filepath):
-            with open(filepath, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith("#"):
-                        continue
-                    if "=" in line:
-                        k, v = line.split("=", 1)
-                        env[k.strip()] = v.strip()
-        return env
 
-    env_path = Path(__file__).resolve().parent.parent / "API.env"
-    env_vars = load_env(env_path)
-    os.environ.update(env_vars)
-
-    # ✅ 2. 加载 PDF 并构建检索系统（初始化一次即可）
-    try:
-        dataset_dir = Path(__file__).resolve().parent.parent / "dataset"
-        rag_docs = load_pdfs_from_folder(dataset_dir)
-        # 新增：检测GPU并打印当前设备
-        try:
-            import torch
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            print(f"[INFO] 当前向量检索模型加载设备: {device}")
-        except ImportError:
-            device = "cpu"
-            print("[WARN] 未安装torch，默认使用CPU")
-        retriever = build_retriever_from_docs(rag_docs)
-        pass  # 注释或跳过文档加载逻辑
-    except Exception as e:
-        print(f"文档检索功能已跳过：{e}")
-
-    # ✅ 3. RAG 问答界面
-    with gr.Tab("📚 文档问答助手"):
-        gr.Markdown("### 输入关键词（如城市名），从PDF文档中检索并由大模型回答")
-
+    # 语音助手Tab
+    with gr.Tab("语音助手"):
+        gr.Markdown("### 语音输入查询旅行信息")
         with gr.Row():
-            user_query = gr.Textbox(label="输入问题", placeholder="例如：北京")
-            ask_btn = gr.Button("问大模型", variant="primary")
+            with gr.Column():
+                audio_input = gr.Audio(source="microphone", type="filepath", label="语音输入")
+                voice_query_btn = gr.Button("🔊 语音查询", variant="primary")
+                text_output = gr.Textbox(label="识别结果", interactive=False)
+            with gr.Column():
+                chatbot = gr.Chatbot(label="对话")
+                chat_history = gr.State([])
+                user_message = gr.Textbox(label="文字输入", placeholder="请输入您的问题...")
+                send_btn = gr.Button("发送")
+        
+        # 语音查询按钮事件
+        voice_query_btn.click(
+            speech_to_text,
+            inputs=[audio_input],
+            outputs=[text_output]
+        ).then(
+            chat_with_agent,
+            inputs=[text_output, chat_history],
+            outputs=[user_message, chatbot]
+        )
+        
+        # 文字发送按钮事件
+        send_btn.click(
+            chat_with_agent,
+            inputs=[user_message, chat_history],
+            outputs=[user_message, chatbot]
+        )
 
+    # 城市景点地图Tab
+    with gr.Tab("城市景点地图"):
+        gr.Markdown("### 查询城市或景点地图")
         with gr.Row():
-            rag_answer = gr.Textbox(label="回答结果", lines=10, interactive=False)
+            with gr.Column():
+                city_place_input = gr.Textbox(label="城市或景点名称", placeholder="例如：北京故宫")
+                map_date_input = gr.Textbox(label="日期（可选）", placeholder="YYYY-MM-DD")
+                generate_city_map_btn = gr.Button("生成地图", variant="primary")
+            with gr.Column():
+                city_map_output = gr.Image(label="地图")
+                city_map_info = gr.Textbox(label="地点信息", interactive=False)
+        
+        generate_city_map_btn.click(
+            generate_city_map,
+            inputs=[city_place_input, map_date_input],
+            outputs=[city_map_output, city_map_info]
+        )
 
-        def query_docs_with_rag_stream(query):
-            if not query.strip():
-                yield "请输入问题"
-                return
-            buff=""
-            for chunk in stream_search_docs(query, retriever):
-                if chunk is None: continue
-                else:buff+= chunk
-                yield buff
-            yield buff
-
-        ask_btn.click(fn=query_docs_with_rag_stream, inputs=[user_query], outputs=[rag_answer])
-
+# 设置中文字体
+# 由于无法直接修改系统字体，建议在Gradio界面中使用支持中文的字体
+# 启动应用
 if __name__ == "__main__":
     demo.launch()
