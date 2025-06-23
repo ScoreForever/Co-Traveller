@@ -1158,9 +1158,21 @@ with gr.Blocks() as demo:
     os.environ.update(env_vars)
 
     # ✅ 2. 加载 PDF 并构建检索系统（初始化一次即可）
-    dataset_dir = Path(__file__).resolve().parent.parent / "dataset"
-    rag_docs = load_pdfs_from_folder(dataset_dir)
-    retriever = build_retriever_from_docs(rag_docs)
+    try:
+        dataset_dir = Path(__file__).resolve().parent.parent / "dataset"
+        rag_docs = load_pdfs_from_folder(dataset_dir)
+        # 新增：检测GPU并打印当前设备
+        try:
+            import torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            print(f"[INFO] 当前向量检索模型加载设备: {device}")
+        except ImportError:
+            device = "cpu"
+            print("[WARN] 未安装torch，默认使用CPU")
+        retriever = build_retriever_from_docs(rag_docs)
+        pass  # 注释或跳过文档加载逻辑
+    except Exception as e:
+        print(f"文档检索功能已跳过：{e}")
 
     # ✅ 3. RAG 问答界面
     with gr.Tab("📚 文档问答助手"):
