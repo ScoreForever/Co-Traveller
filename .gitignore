@@ -184,3 +184,6 @@ API.env
 # 忽略数据库
 /database/
 /dataset/
+
+# 忽略模型文件夹
+/src/models/
