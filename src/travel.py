@@ -1232,8 +1232,8 @@ with gr.Blocks() as demo:
             inputs=[file_selector],
             outputs=[status_msg, history_table]
         ).then(
-            fn=lambda: update_history_table(),
-            outputs=[history_table, file_selector]
+            fn=update_history_table,
+            outputs=[file_selector]
         )
     def load_env(filepath):
         env = {}
@@ -1253,10 +1253,9 @@ with gr.Blocks() as demo:
     os.environ.update(env_vars)
 
     # ✅ 2. 加载 PDF 并构建检索系统（初始化一次即可）
-    ###注意为了有文件能够运行对部分代码进行注释
     try:
         dataset_dir = Path(__file__).resolve().parent.parent / "dataset"
-        # rag_docs = load_pdfs_from_folder(dataset_dir)
+        rag_docs = load_pdfs_from_folder(dataset_dir)
         # 新增：检测GPU并打印当前设备
         try:
             import torch
@@ -1265,7 +1264,7 @@ with gr.Blocks() as demo:
         except ImportError:
             device = "cpu"
             print("[WARN] 未安装torch，默认使用CPU")
-        # retriever = build_retriever_from_docs(rag_docs)
+        retriever = build_retriever_from_docs(rag_docs)
         pass  # 注释或跳过文档加载逻辑
     except Exception as e:
         print(f"文档检索功能已跳过：{e}")
