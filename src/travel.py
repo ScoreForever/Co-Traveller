@@ -1254,7 +1254,10 @@ with gr.Blocks() as demo:
 
     # ✅ 2. 加载 PDF 并构建检索系统（初始化一次即可）
     try:
+        # dataset目录应在项目根目录下，models目录在travel.py同级目录下
         dataset_dir = Path(__file__).resolve().parent.parent / "dataset"
+        models_dir = Path(__file__).resolve().parent / "models"
+        # 正确：load_pdfs_from_folder 应该用于 dataset_dir，models_dir 仅作为模型存放目录传递给后续需要模型路径的函数
         rag_docs = load_pdfs_from_folder(dataset_dir)
         # 新增：检测GPU并打印当前设备
         try:
@@ -1264,7 +1267,8 @@ with gr.Blocks() as demo:
         except ImportError:
             device = "cpu"
             print("[WARN] 未安装torch，默认使用CPU")
-        retriever = build_retriever_from_docs(rag_docs)
+        # 如果 build_retriever_from_docs 需要模型目录，需传递 models_dir
+        retriever = build_retriever_from_docs(rag_docs, models_dir=models_dir)
         pass  # 注释或跳过文档加载逻辑
     except Exception as e:
         print(f"文档检索功能已跳过：{e}")

@@ -187,3 +187,4 @@ API.env
 
 # 忽略模型文件夹
 /src/models/
+/models/

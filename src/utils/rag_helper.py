@@ -12,7 +12,7 @@ import json
 
 # 远程 Qwen API 流式响应封装
 def stream_qwen_response(prompt):
-    api_key = os.getenv("SILICON_API_KEY")
+    api_key = os.getenv("sub_SILICON_API_KEY")
     if not api_key:
         raise ValueError("请设置 SILICON_API_KEY 环境变量")
 
@@ -22,7 +22,7 @@ def stream_qwen_response(prompt):
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "Qwen/Qwen3-8B",
+        "model": "deepseek-ai/DeepSeek-V3",
         "stream": True,
         "messages": [
             {"role": "system", "content": "你是一个友好的中文助手。"},
@@ -61,14 +61,18 @@ def load_pdfs_from_folder(folder_path):
     return documents
 
 # 构建仅检索的向量检索器
-def build_retriever_from_docs(documents):
+def build_retriever_from_docs(documents, models_dir=None):
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
     chunks = splitter.split_documents(documents)
     if not chunks:
         raise ValueError("文档内容为空，无法构建向量数据库")
 
+    # 支持自定义模型目录
+    model_path = "./models/bge-small-zh"
+    if models_dir is not None:
+        model_path = str(Path(models_dir) / "bge-small-zh")
     embedder = HuggingFaceEmbeddings(
-        model_name="./models/bge-small-zh",
+        model_name=model_path,
         model_kwargs={"device": "cpu"}
     )
     vectordb = FAISS.from_documents(chunks, embedder)
