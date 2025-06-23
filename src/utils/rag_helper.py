@@ -22,7 +22,7 @@ def stream_qwen_response(prompt):
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "deepseek-ai/DeepSeek-V3",
+        "model": "Qwen/Qwen3-8B",
         "stream": True,
         "messages": [
             {"role": "system", "content": "你是一个友好的中文助手。"},
