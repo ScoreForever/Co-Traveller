@@ -470,26 +470,84 @@ def generate_city_map(place, date=None):
         print(f"获取地图失败: {e}")
         return None, "加载地图失败"
 
-def speech_to_text(audio_path, api_key=None):
+def speech_to_text(audio_path, api_key=None, secret_key=None):
     """调用语音转文字API（示例使用百度语音识别）"""
+    # 检查ffmpeg/ffprobe依赖
+    try:
+        from pydub.utils import which
+        if not which("ffmpeg") or not which("ffprobe"):
+            return "语音识别失败：请确保已安装 ffmpeg 并配置到系统环境变量"
+    except Exception:
+        return "语音识别失败：请确保已安装 ffmpeg 并配置到系统环境变量"
+
     API_URL = "https://vop.baidu.com/server_api"
     APP_ID = BAIDU_APP_ID
-    API_KEY = BAIDU_API_KEY
-    SECRET_KEY = BAIDU_SECRET_KEY
+    API_KEY = api_key if api_key else BAIDU_API_KEY
+    SECRET_KEY = secret_key if secret_key else BAIDU_SECRET_KEY
 
-    # 确保temp目录存在
+    # 支持多种输入类型
+    import numpy as np
+    import io
+    from pydub import AudioSegment
+
     temp_dir = Path("../temp")
     temp_dir.mkdir(parents=True, exist_ok=True)
     wav_path = temp_dir / "temp.wav"
 
-    audio = AudioSegment.from_file(audio_path)
-    audio.export(str(wav_path), format="wav")
+    try:
+        if isinstance(audio_path, str) and os.path.isfile(audio_path):
+            audio = AudioSegment.from_file(audio_path)
+        elif isinstance(audio_path, bytes):
+            audio = AudioSegment.from_file(io.BytesIO(audio_path))
+        elif isinstance(audio_path, np.ndarray):
+            arr = audio_path
+            # 支持一维（单声道）、二维（多声道）、以及Gradio麦克风tuple格式
+            if arr.ndim == 2:
+                arr = arr.mean(axis=1)
+            arr = arr.astype(np.float32)
+            # 归一化到[-1, 1]，防止溢出
+            if arr.size > 0 and (arr.max() > 1.0 or arr.min() < -1.0):
+                arr = arr / np.abs(arr).max()
+            # 若全为0则不处理
+            if arr.size == 0 or np.all(arr == 0):
+                return "语音识别失败：音频为空"
+            audio = AudioSegment(
+                (arr * 32767).astype(np.int16).tobytes(),
+                frame_rate=16000,
+                sample_width=2,
+                channels=1
+            )
+        elif isinstance(audio_path, tuple) and len(audio_path) == 2:
+            # Gradio麦克风输入格式 (sample_rate, np.ndarray)
+            sample_rate, arr = audio_path
+            arr = np.array(arr)
+            # 修正：确保归一化到[-1,1] float32
+            if arr.dtype != np.float32:
+                arr = arr.astype(np.float32)
+            if arr.max() > 1.1 or arr.min() < -1.1:
+                arr = arr / 32768.0
+            if arr.ndim == 2:
+                arr = arr.mean(axis=1)
+            if arr.size == 0 or np.all(arr == 0):
+                return "语音识别失败：音频为空"
+            audio = AudioSegment(
+                (arr * 32767).astype(np.int16).tobytes(),
+                frame_rate=sample_rate if sample_rate else 16000,
+                sample_width=2,
+                channels=1
+            )
+        else:
+            return "语音识别失败：不支持的音频输入类型"
+        audio = audio.set_frame_rate(16000).set_channels(1)
+        audio.export(str(wav_path), format="wav")
+    except Exception as e:
+        return f"语音识别失败：音频解码错误，请检查ffmpeg安装。错误信息: {e}"
 
     with open(wav_path, "rb") as f:
         speech_data = f.read()
     
     params = {
-        "dev_pid": 1536,
+        "dev_pid": 1537,  # 修正：3307错误为音频内容异常，1537为普通话带标点
         "format": "wav",
         "rate": 16000,
         "channel": 1,
@@ -498,13 +556,16 @@ def speech_to_text(audio_path, api_key=None):
     }
     
     headers = {"Content-Type": "audio/wav; rate=16000"}
-    response = requests.post(API_URL, params=params, headers=headers, data=speech_data)
-    result = response.json()
+    try:
+        response = requests.post(API_URL, params=params, headers=headers, data=speech_data)
+        result = response.json()
+    except Exception as e:
+        return f"语音识别失败：API请求错误，{e}"
     
     if result.get("err_no") == 0:
         return result["result"][0]
     else:
-        return "语音识别失败，请重试"
+        return f"语音识别失败，请重试，错误码：{result.get('err_no')}，信息：{result.get('err_msg', '')}"
 
 def get_access_token(api_key=None, secret_key=None):
     """获取百度语音API访问令牌"""
@@ -516,81 +577,168 @@ def get_access_token(api_key=None, secret_key=None):
     response = requests.get(token_url)
     return response.json()["access_token"]
 
-def chat_with_agent(text, chat_history):
-    """模拟智能体对话（需替换为真实LLM API）"""
-    api_key = SILICON_API_KEY  # 使用SILICON_API_KEY
+def chat_with_agent(text, chat_history, openai_api_key=None):
+    """模拟智能体对话（已替换为硅基流动API）"""
+    api_key = openai_api_key if openai_api_key else SILICON_API_KEY
     if not api_key:
-        return "未配置SILICON_API_KEY", chat_history
-    headers = {"Authorization": f"Bearer {api_key}"}
+        return "未配置SILICON_API_KEY", chat_history, ""
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    # 修正历史格式，确保为 [{"role": ..., "content": ...}]
+    messages = []
+    messages.append({
+        "role": "system",
+        "content": "你是一个专业的旅行助手，可以帮助用户规划行程、查询景点、天气等信息。回答要简洁专业。"
+    })
+    for item in chat_history:
+        if isinstance(item, dict) and "role" in item and "content" in item:
+            messages.append(item)
+        elif isinstance(item, (list, tuple)) and len(item) == 2:
+            messages.append({"role": item[0], "content": item[1]})
+    messages.append({"role": "user", "content": text})
     payload = {
         "model": "gpt-3.5-turbo",
-        "messages": [{"role": "user", "content": text}] + chat_history
+        "messages": messages,
+        "temperature": 0.7,
+        "max_tokens": 500
     }
-    
-    response = requests.post("https://api.openai.com/v1/chat/completions", json=payload, headers=headers)
-    if response.status_code == 200:
-        assistant_msg = response.json()["choices"][0]["message"]["content"]
-        chat_history.append({"role": "user", "content": text})
-        chat_history.append({"role": "assistant", "content": assistant_msg})
-        return "", chat_history
-    else:
-        return "对话失败，请重试", chat_history
-
-def save_travel_plan(place1, date1, place2, date2, ticket_link, travel_plan_data, filename=None):
-    """保存旅行计划到JSON文件"""
-    if not filename:
-        filename = f"{place1}_{place2}_{date1.replace('-', '')}.json"
-    
-    save_dir = Path("../temp/travel_plans")
-    save_dir.mkdir(parents=True, exist_ok=True)
-    
-    file_path = save_dir / filename
-    
-    if isinstance(travel_plan_data, pd.DataFrame):
-        travel_plan_data = travel_plan_data.to_dict('records')
-    
-    plan_data = {
-        "place1": place1,
-        "date1": date1,
-        "place2": place2,
-        "date2": date2,
-        "ticket_link": ticket_link,
-        "travel_plan_data": travel_plan_data,
-        "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "short_summary": summarize_travel_plan(travel_plan_data)
-    }
-    
     try:
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(plan_data, f, ensure_ascii=False, indent=2)
-        
-        return f"旅行计划已保存为: {filename}"
+        # 替换为硅基流动API地址
+        response = requests.post(
+            "https://api.siliconflow.cn/v1/chat/completions",
+            json=payload,
+            headers=headers,
+            timeout=30
+        )
+        if response.status_code == 200:
+            assistant_msg = response.json()["choices"][0]["message"]["content"]
+            new_history = chat_history.copy()
+            new_history.append({"role": "user", "content": text})
+            new_history.append({"role": "assistant", "content": assistant_msg})
+            return "", new_history, assistant_msg
+        else:
+            # 针对403错误，给出更友好的提示
+            try:
+                err = response.json()
+                err_msg = err.get("error", {}).get("message", "")
+            except Exception:
+                err_msg = response.text
+            if response.status_code == 403 and "not supported" in err_msg.lower():
+                return (
+                    "对话失败：当前网络环境或IP无法访问硅基流动API，建议：\n"
+                    "1. 检查你的API Key是否为有效Key，且未被封禁；\n"
+                    "2. 若你在中国大陆，请确保网络可访问硅基流动API；\n"
+                    "3. 你也可以在API.env中配置代理API地址和Key。\n"
+                    f"原始错误信息：{err_msg}",
+                    chat_history,
+                    ""
+                )
+            return f"对话失败，请重试，错误码：{response.status_code}，信息：{err_msg}", chat_history, ""
     except Exception as e:
-        return f"保存失败: {str(e)}"
+        return f"对话异常: {str(e)}", chat_history, ""
 
-def summarize_travel_plan(plan_data):
-    """生成旅行计划摘要"""
-    if not plan_data:
-        return "无行程信息"
+def text_to_speech(text, api_key=None, secret_key=None):
+    """调用百度TTS将文本转为语音文件，返回音频文件路径"""
+    if not text:
+        return None
+    API_KEY = api_key if api_key else BAIDU_API_KEY
+    SECRET_KEY = secret_key if secret_key else BAIDU_SECRET_KEY
+    token = get_access_token(API_KEY, SECRET_KEY)
+    tts_url = "http://tsn.baidu.com/text2audio"
+    params = {
+        "tex": text,
+        "lan": "zh",
+        "tok": token,
+        "ctp": 1,
+        "cuid": "travel-assistant",
+        "spd": 5,
+        "pit": 5,
+        "vol": 5,
+        "per": 0,
+        "aue": 6  # wav
+    }
+    try:
+        response = requests.post(tts_url, data=params)
+        if response.headers.get("Content-Type", "").startswith("audio/"):
+            temp_dir = Path("../temp")
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            audio_path = temp_dir / f"tts_{int(time.time())}.wav"
+            with open(audio_path, "wb") as f:
+                f.write(response.content)
+            return str(audio_path)
+        else:
+            return None
+    except Exception:
+        return None
+
+def process_speech(audio_data, chat_history, baidu_api_key, baidu_secret_key, openai_api_key):
+    """处理语音输入并调用对话"""
+    if audio_data is None:
+        return "请先录制或上传语音", chat_history, "", None
     
-    summary = []
-    days_seen = set()
-    for item in plan_data[:6]:
-        day = item["日期"]
-        if day not in days_seen:
-            days_seen.add(day)
-            summary.append(f"{day}: {item['地点']} - {item['活动']}")
+    # 处理不同类型的音频输入
+    if isinstance(audio_data, str):  # 文件路径
+        audio_path = audio_data
+    elif isinstance(audio_data, tuple):  # 麦克风输入 (sample_rate, audio_array)
+        _, audio_array = audio_data
+        # 创建临时文件
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+            audio_path = temp_file.name
+            # 将numpy数组转换为音频文件
+            audio = AudioSegment(
+                (audio_array * 32767).astype(np.int16).tobytes(),
+                frame_rate=16000,
+                sample_width=2,
+                channels=1
+            )
+            audio.export(audio_path, format="wav")
+    else:
+        return "不支持的音频输入类型", chat_history, "", None
     
-    if len(plan_data) > 6:
-        summary.append(f"... 等共{len(plan_data)}项行程")
+    # 语音转文字
+    recognition_text = speech_to_text(audio_path, baidu_api_key, baidu_secret_key)
     
-    return "\n".join(summary)
+    if recognition_text.startswith("语音识别失败") or recognition_text.startswith("语音处理错误"):
+        return recognition_text, chat_history, recognition_text, None
+    
+    # 调用对话API
+    error_msg, new_chat_history, assistant_reply = chat_with_agent(
+        recognition_text,
+        chat_history,
+        openai_api_key  # 确保传递API密钥
+    )
+    
+    # 语音合成
+    audio_path = None
+    if assistant_reply:
+        audio_path = text_to_speech(assistant_reply, baidu_api_key, baidu_secret_key)
+    
+    return error_msg, new_chat_history, recognition_text, audio_path
+
+# ================== 语音助手全局状态和历史管理函数提前 ==================
+class VoiceAssistantState:
+    def __init__(self):
+        self.recognition_text = ""
+        self.is_processing = False
+        self.last_audio_path = ""
+        self.chat_history = []
+        self.audio_file_path = ""
+    
+    def reset(self):
+        self.recognition_text = ""
+        self.is_processing = False
+        self.last_audio_path = ""
+        self.chat_history = []
+        self.audio_file_path = ""
+
+assistant_state = VoiceAssistantState()
 
 def list_saved_plans():
     """列出所有保存的旅行计划"""
     save_dir = Path("../temp/travel_plans")
     save_dir.mkdir(parents=True, exist_ok=True)
-    
     plans = []
     for file in save_dir.glob("*.json"):
         try:
@@ -607,7 +755,6 @@ def list_saved_plans():
                 })
         except:
             continue
-    
     plans.sort(key=lambda x: x["saved_at"], reverse=True)
     return plans
 
@@ -615,18 +762,14 @@ def load_travel_plan(filename):
     """加载保存的旅行计划"""
     save_dir = Path("../temp/travel_plans")
     file_path = save_dir / filename
-    
     if not file_path.exists():
         return None, None, None, None, None, None, "未找到指定的旅行计划"
-    
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             plan = json.load(f)
-        
         travel_plan_data = plan["travel_plan_data"]
         if isinstance(travel_plan_data, list) and len(travel_plan_data) > 0:
             travel_plan_data = pd.DataFrame(travel_plan_data)
-        
         return (
             plan["place1"], 
             plan["date1"], 
@@ -643,114 +786,13 @@ def delete_travel_plan(filename):
     """删除保存的旅行计划"""
     save_dir = Path("../temp/travel_plans")
     file_path = save_dir / filename
-    
     if not file_path.exists():
         return "未找到指定的旅行计划", list_saved_plans()
-    
     try:
         file_path.unlink()
         return "旅行计划已删除", list_saved_plans()
     except Exception as e:
         return f"删除失败: {str(e)}", list_saved_plans()
-#新增函数
-def generate_route_map(places_str, transport, optimize, show_details):
-    """生成路线地图和路线信息"""
-    if not places_str.strip():
-        return "请输入景点或地址", "请输入景点或地址"
-    
-    # 解析景点列表
-    places = [p.strip() for p in places_str.split('，') if p.strip()]
-    if len(places) < 2:
-        return "请至少输入两个景点或地址", "请至少输入两个景点或地址"
-    
-    # 获取景点经纬度
-    locations = []
-    valid_places = []
-    invalid_places = []
-    
-    for place in places:
-        # 先通过POI搜索获取地址信息
-        poi_info = amap.search_poi(place)
-        if not poi_info:
-            print(f"POI搜索失败: {place}")
-            invalid_places.append(place)
-            continue
-        
-        # 地理编码
-        lng, lat, formatted_addr, address_info = amap.geocode_address(poi_info)
-        if lng and lat:
-            # 确保传递4个元素：lng, lat, formatted_addr, address_info
-            locations.append((lng, lat, formatted_addr, address_info))
-            valid_places.append(formatted_addr)
-        else:
-            print(f"地理编码失败: {place}")
-            invalid_places.append(place)
-    
-    if not locations:
-        return "无法解析任何地址", "无法解析任何地址"
-    
-    # 优化路线顺序（如果需要）
-    if optimize and len(locations) > 2:
-        try:
-            # 优化路线顺序
-            locations = amap.optimize_route_order(locations)
-        except Exception as e:
-            print(f"路线优化失败: {e}")
-    
-    # 计算路线
-    routes = []
-    if len(locations) > 1:
-        for i in range(len(locations) - 1):
-            start_lng, start_lat, start_addr, start_info = locations[i]
-            end_lng, end_lat, end_addr, end_info = locations[i + 1]
-            
-            # 确保起点和终点有效
-            if not all([start_lng, start_lat, end_lng, end_lat]):
-                print(f"跳过无效路线: {start_addr} -> {end_addr}")
-                continue
-                
-            route = amap.calculate_driving_route(start_lng, start_lat, end_lng, end_lat)  # 正确函数
-            
-            if route["success"]:
-                routes.append(route)
-                print(f"成功计算路线: {start_addr} -> {end_addr}")
-            else:
-                print(f"路线计算失败: {start_addr} -> {end_addr}")
-    
-    # 生成地图和路线信息
-    try:
-        map_html = amap.generate_route_map(
-            locations, 
-            routes,
-            transport_mode=transport,
-            show_details=show_details,
-            optimize_route=optimize
-        )
-        
-        # 生成路线信息文本
-        route_text = "路线规划结果:\n\n"
-        if invalid_places:
-            route_text += f"⚠️ 无法解析以下地址: {', '.join(invalid_places)}\n\n"
-        
-        route_text += "✅ 有效景点:\n"
-        for i, (lng, lat, addr, info) in enumerate(locations):
-            route_text += f"{i+1}. {addr} (经度: {lng}, 纬度: {lat})\n"
-        
-        if routes:
-            route_text += "\n🚗 路线详情:\n"
-            for i, route in enumerate(routes):
-                if route["success"]:
-                    distance = float(route["distance"]) / 1000
-                    duration = int(route["duration"]) // 60
-                    start = locations[i][2]
-                    end = locations[i+1][2]
-                    route_text += f"{i+1}. {start} → {end}: {distance:.2f}公里, {duration}分钟\n"
-        
-        return map_html, route_text
-        
-    except Exception as e:
-        print(f"生成地图失败: {e}")
-        return f"生成地图失败: {str(e)}", "请检查输入参数"
 
 # 创建界面
 with gr.Blocks() as demo:
@@ -901,7 +943,6 @@ with gr.Blocks() as demo:
                             yield ticket_link, df
                         except Exception:
                             continue
-                    last_size = os.path.getsize(llm_path)
                 time.sleep(0.5)
                 waited += 0.5
                 if waited > max_wait:
@@ -932,37 +973,173 @@ with gr.Blocks() as demo:
             inputs=[place1, date1] + dest_inputs + [date2, ticket_url_output, travel_plan_output, filename_input],
             outputs=[save_status]
         )
-    
-    # 语音输入Tab
-    with gr.Tab("语音输入"):    
-        gr.Markdown("### 🗣️ 语音与智能体对话")
-        chat_state = gr.State([])
-    
-        with gr.Row():
-            with gr.Column():
-                audio_input = gr.Audio(label="语音输入", type="filepath")
-                stt_btn = gr.Button("开始识别", variant="primary")
-                clear_btn = gr.Button("清空历史")
+
+    with gr.Tab("🗣️ 语音助手"):    
+        gr.Markdown("### 🎤 语音对话助手")
         
-            with gr.Column():
-                chatbot = gr.Chatbot(label="旅行助手", type="messages", height=600)
-    
-        def process_speech(audio_path, chat_history, api_key):
-            if not audio_path:
-                return "请先上传语音文件", chat_history
-            text = speech_to_text(audio_path, api_key)
-            return chat_with_agent(text, chat_history)
-    
+        # 使用Column布局组织组件
+        with gr.Row():
+            with gr.Column(scale=1):
+                audio_input = gr.Audio(
+                    label="上传语音文件",
+                    type="filepath",
+                    interactive=True
+                )
+                
+                record_status = gr.Textbox(
+                    label="状态",
+                    value="等待语音输入...",
+                    interactive=False,
+                    elem_id="record_status"  # 添加 ID
+                )
+                
+                with gr.Row():
+                    stt_btn = gr.Button("🔍 识别语音", variant="primary")
+                    clear_btn = gr.Button("🧹 清空历史")
+                    tts_btn = gr.Button("🔊 播放回复")
+                
+                speech_text = gr.Textbox(
+                    label="语音识别结果",
+                    placeholder="识别结果将显示在这里...",
+                    lines=3,
+                    interactive=False
+                )
+                
+                audio_output = gr.Audio(
+                    label="语音回复",
+                    type="filepath",
+                    interactive=False,
+                    visible=False
+                )
+            
+            with gr.Column(scale=2):
+                chatbot = gr.Chatbot(
+                    label="对话记录",
+                    height=500,
+                    show_label=True,
+                    value=[],
+                    type="messages"
+                )
+        
+        # 添加 JavaScript 状态更新
+        status_js = """
+        <script>
+        function updateStatus() {
+            const statusBox = document.getElementById('record_status');
+            if (statusBox) {
+                if (statusBox.innerText.includes('处理中')) {
+                    const dots = '.'.repeat((Math.floor(Date.now() / 500) % 4));
+                    statusBox.innerText = '处理中' + dots;
+                }
+            }
+            setTimeout(updateStatus, 500);
+        }
+        setTimeout(updateStatus, 500);
+        </script>
+        """
+        gr.HTML(status_js)
+        
+        # 处理上传的音频文件
+        def handle_upload(file):
+            if file and os.path.isfile(file):
+                assistant_state.audio_file_path = file
+            else:
+                assistant_state.audio_file_path = ""
+            # 不返回任何值
+
+        audio_input.upload(
+            fn=handle_upload,
+            inputs=[audio_input],
+            outputs=[]
+        )
+
+        # 语音识别和对话处理
+        def recognize_and_chat(audio_data=None):
+            # 优先使用上传的音频文件路径
+            audio_path = assistant_state.audio_file_path
+            print(f"[DEBUG] audio_path: {audio_path}")
+            print(f"[DEBUG] audio_input.value type: {type(audio_input.value)}")
+            print(f"[DEBUG] recognize_and_chat received audio_data param: {type(audio_data)}")
+            import platform
+            import gradio
+            print(f"[DEBUG] gradio version: {gradio.__version__}")
+            print(f"[DEBUG] platform: {platform.platform()}")
+
+            # 优先使用传入的 audio_data（gradio 5.x 推荐方式）
+            if audio_data is not None:
+                # 修正：如果是 tuple，取第二项（numpy数组），并归一化到[-1,1]
+                if isinstance(audio_data, tuple) and len(audio_data) == 2:
+                    sample_rate, arr = audio_data
+                    print(f"[DEBUG] audio_data tuple: sample_rate={sample_rate}, arr.shape={getattr(arr, 'shape', None)}")
+                    arr = np.array(arr)
+                    if arr.dtype != np.float32:
+                        arr = arr.astype(np.float32)
+                    # Gradio 5.x 录音通常是[-1,1] float32，但有时是int16
+                    if arr.max() > 1.1 or arr.min() < -1.1:
+                        arr = arr / 32768.0
+                    audio_data = (sample_rate, arr)
+            elif audio_path and os.path.isfile(audio_path):
+                print("[DEBUG] 使用上传的音频文件路径")
+                audio_data = audio_path
+            else:
+                pass
+            # 修正：如果麦克风录音有内容则允许识别
+            if audio_data is None or (isinstance(audio_data, (np.ndarray, tuple)) and (getattr(audio_data, 'size', 0) == 0)):
+                print("[DEBUG] 未检测到有效音频数据，audio_data:", audio_data)
+                print("[DEBUG] 可能原因：")
+                print("  1. 浏览器未允许麦克风权限或未正确录音。")
+                print("  2. Gradio 版本兼容性问题。")
+                print("  3. 录音后未点击“识别语音”按钮。")
+                print("  4. 录音组件未正确传递音频数据。")
+                print("  5. 若用远程/手机访问，部分浏览器不支持音频录制。")
+                return "请先录制或上传语音", assistant_state.chat_history, "", None
+            print("[DEBUG] audio_data 检测通过，开始调用 process_speech")
+            return process_speech(
+                audio_data,
+                assistant_state.chat_history,
+                BAIDU_API_KEY,
+                BAIDU_SECRET_KEY,
+                SILICON_API_KEY
+            )
+
+        # 设置按钮事件
         stt_btn.click(
-            fn=process_speech,
-            inputs=[audio_input, chat_state, gr.Textbox(visible=False, value=BAIDU_API_KEY)],
-            outputs=[gr.Textbox(visible=False), chatbot]
+            fn=lambda: {"record_status": "正在处理语音..."},
+            outputs=[record_status]
+        ).then(
+            fn=recognize_and_chat,
+            inputs=[audio_input],  # 关键：把 audio_input 作为输入
+            outputs=[record_status, chatbot, speech_text, audio_output]
+        ).then(
+            fn=lambda: gr.Audio(visible=True),
+            outputs=[audio_output]
+        )
+
+        # 播放回复按钮事件
+        tts_btn.click(
+            fn=lambda: assistant_state.last_audio_path,
+            inputs=[],
+            outputs=[audio_output]
+        ).then(
+            fn=lambda: gr.Audio(visible=True),
+            outputs=[audio_output]
+        )
+
+        # 清空历史按钮
+        def reset_conversation():
+            assistant_state.reset()
+            return {
+                record_status: "对话已清空",
+                chatbot: [],
+                speech_text: "",
+                audio_output: gr.update(visible=False)
+            }
+
+        clear_btn.click(
+            fn=reset_conversation,
+            outputs=[record_status, chatbot, speech_text, audio_output]
         )
     
-        clear_btn.click(
-            fn=lambda: ([], []),
-            outputs=[chat_state, chatbot]
-        )
     # 新增：路线规划标签页
     
     with gr.Tab("🗺️ 路线规划"):
@@ -1068,6 +1245,7 @@ with gr.Blocks() as demo:
                 weather_resp = requests.get(weather_url, headers=headers, params={"location": location})
                 weather_data = weather_resp.json()
                 weather_summary = ""
+                # 修正此处的语法错误：将 '&&' 改为 'and'
                 if weather_resp.status_code == 200 and weather_data.get("code") == "200":
                     daily = weather_data.get("daily", [])
                     icon_html += '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/qweather-icons@1.6.0/font/qweather-icons.css">\n'
@@ -1293,6 +1471,35 @@ with gr.Blocks() as demo:
             yield buff
 
         ask_btn.click(fn=query_docs_with_rag_stream, inputs=[user_query], outputs=[rag_answer])
+
+    # 语音助手使用说明
+    with gr.Tab("使用说明"):
+        gr.Markdown("## 语音助手功能使用说明")
+        gr.Markdown(
+            """
+        **语音录制功能使用说明：**
+
+        1. 打开 Gradio 网页界面，切换到“🗣️ 语音助手”标签页。
+        2. 你可以选择两种方式输入语音：
+           - **方式一：点击“上传语音文件”按钮，选择本地的音频文件（如 .wav/.mp3），然后点击“🔍 识别语音”按钮。**
+           - **方式二：直接点击“上传语音文件”下方的麦克风图标，录制语音，录制完成后点击“🔍 识别语音”按钮。**
+        3. 程序会自动识别你的语音内容，并调用大模型进行对话，结果会显示在“语音识别结果”和“对话记录”中。
+        4. 若要听AI回复，可以点击“🔊 播放回复”按钮。
+        5. 若要清空历史，点击“🧹 清空历史”按钮。
+
+        **注意事项：**
+        - 录音完成后一定要点击“🔍 识别语音”按钮，才能进行识别和对话。
+        - 如果你没有上传音频文件，也没有录音，点击识别会提示“请先录制或上传语音”。
+        - 录音时请确保浏览器已允许麦克风权限。
+        - 支持直接录音和上传音频文件两种方式，任选其一即可。
+
+        **常见问题：**
+        - 如果识别失败，请检查麦克风权限、音频格式，或确保 ffmpeg 已正确安装。
+        - 如果对话失败（如 403），请检查你的大模型 API Key 或网络环境。
+
+        ---
+        """
+        )
 
 if __name__ == "__main__":
     demo.launch()
