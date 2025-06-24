@@ -24,8 +24,10 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from src.utils.rag_helper import load_pdfs_from_folder, build_retriever_from_docs, stream_search_docs
 load_dotenv()
-from src.amap import set_amap_api_key, process_route, create_map_html, geocode_location, calculate_driving_route  # 补充需要的函数
-
+import amap
+from src.amap import geocode_address, set_amap_api_key, process_route
+import html2image
+import requests
 
 
 def load_env(filepath):
@@ -423,6 +425,7 @@ def generate_travel_plan_multi_v2(place1, date1, dests, date2):
         return ticket_link, travel_plan_data, map_html
     except Exception as e:
         return f"发生错误: {str(e)}", "无法生成旅行规划"
+# 带本地缓存的城市列表获取（24小时更新）
 
 def generate_city_map(place, date=None):
     """使用高德静态地图API生成城市或景点地图"""
@@ -894,16 +897,24 @@ with gr.Blocks() as demo:
                 
                 submit_btn = gr.Button("🚗 规划路线", variant="primary")
                 
+                # 添加路线类型选择下拉框
+                route_type = gr.Dropdown(
+                    label="路线类型",
+                    choices=["驾车", "公交", "步行"],
+                    value="驾车"
+                )
+                
                 gr.Examples(
                     examples=[
-                        ["北京天安门", "北京颐和园"],
-                        ["上海外滩", "上海东方明珠"],
-                        ["广州塔", "广州白云机场"]
+                        ["北京天安门", "北京颐和园", "驾车"],
+                        ["上海外滩", "上海东方明珠", "公交"],
+                        ["广州塔", "广州白云机场", "步行"]
                     ],
-                    inputs=[start_location, end_location],
+                    inputs=[start_location, end_location, route_type],
                     label="示例路线"
                 )
-            
+
+           
             with gr.Column(scale=2):
                 with gr.Group():
                     gr.Markdown("### 📊 路线摘要")
@@ -919,13 +930,12 @@ with gr.Blocks() as demo:
                 with gr.Group():
                     gr.Markdown("### 🚥 详细路线指引")
                     step_instructions = gr.Textbox(label="导航步骤", lines=8, interactive=False)
-        
-        # 设置事件处理（注意：需确保process_route函数在当前作用域可用）
-        submit_btn.click(
-            fn=process_route,
-            inputs=[start_location, end_location],
-            outputs=[summary, map_display, step_instructions]
-        )
+                
+            submit_btn.click(
+                fn=process_route,
+                inputs=[start_location, end_location, route_type],
+                outputs=[summary, map_display, step_instructions])
+
     # 天气查询Tab
     with gr.Tab("🌦️ 地点天气查询"):
         gr.Markdown("### 输入地点，查看未来3天天气图标、描述、生活指数和地图")
@@ -957,7 +967,7 @@ with gr.Blocks() as demo:
             if not poi_info:
                 poi_info = {'address': place}
                 
-            lng, lat, detail, _ = amap.geocode_address(poi_info)
+            lng, lat, detail = geocode_address(poi_info['address'])
             if not lng or not lat:
                 return "", f"无法识别地点：{place}", "", None, ""
 
@@ -1158,7 +1168,6 @@ with gr.Blocks() as demo:
     os.environ.update(env_vars)
 
     # ✅ 2. 加载 PDF 并构建检索系统（初始化一次即可）
-    ###注意为了有文件能够运行对部分代码进行注释
     try:
         dataset_dir = Path(__file__).resolve().parent.parent / "dataset"
         # rag_docs = load_pdfs_from_folder(dataset_dir)

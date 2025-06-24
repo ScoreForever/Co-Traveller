@@ -221,7 +221,12 @@ def process_route(start_location, end_location):
     except Exception as e:
         return f"处理过程中发生错误: {str(e)}", "", ""
 
-# 创建Gradio界面
+
+
+# 启动应用
+if __name__ == "__main__":
+    app = create_interface()
+    app.launch()# 创建Gradio界面
 def create_interface():
     with gr.Blocks(title="高德地图路线规划", theme=gr.themes.Soft()) as app:
         gr.Markdown("# 🗺️ 高德地图路线规划")
@@ -282,8 +287,3 @@ def create_interface():
         )
     
     return app
-
-# 启动应用
-if __name__ == "__main__":
-    app = create_interface()
-    app.launch()
