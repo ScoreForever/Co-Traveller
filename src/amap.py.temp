@@ -1,0 +1,662 @@
+import requests
+import re
+import json
+import time
+import math
+
+# 高德地图API配置
+AMAP_API_KEY = ""  # 将在travel.py中设置
+
+def set_amap_api_key(api_key):
+    global AMAP_API_KEY
+    AMAP_API_KEY = api_key
+    print(f"[AMAP] API密钥已设置为: {api_key}")
+
+def search_poi(keyword, city_name=None):
+    """使用高德POI搜索API将关键词转换为地址"""
+    if not keyword.strip():
+        return None
+        
+    # 获取城市代码（adcode），默认北京
+    city_code = "110000"  # 北京市城市代码
+    if city_name:
+        # 优先使用传入的城市代码，若获取失败则使用默认
+        temp_code = get_city_code_by_name(city_name)
+        if temp_code:
+            city_code = temp_code
+    
+    url = "https://restapi.amap.com/v5/place/text"
+    params = {
+        "key": AMAP_API_KEY,
+        "keywords": keyword,
+        "output": "json",
+        "offset": 10,
+        "extensions": "all",
+        "citylimit": "true",  # 严格限制城市范围
+        "city": city_code      # 强制指定城市代码
+    }
+    
+    try:
+        response = requests.get(url, params=params, timeout=5)
+        data = response.json()
+        print(f"POI搜索响应: {json.dumps(data, ensure_ascii=False, indent=2)}")  # 调试日志
+        
+        if data["status"] == "1" and data["pois"]:
+            # 优先选择景点、风景名胜等类型
+            poi_priorities = [
+                '风景名胜', '旅游景点', '公园广场', '博物馆', '纪念馆', '文化场馆',  # 优先匹配景点
+                '宗教场所', '古迹遗址', '娱乐休闲', '购物服务', '餐饮服务',
+                '商务住宅', '地名地址', '交通设施'
+            ]
+            
+            best_poi = None
+            best_score = 0
+            
+            for priority_type in poi_priorities:
+                for poi in data["pois"]:
+                    poi_type = poi.get("type", "")
+                    if priority_type in poi_type:
+                        score = calculate_poi_score(poi, priority_type, poi_priorities)
+                        if score > best_score:
+                            best_score = score
+                            best_poi = poi
+            
+            if best_poi:
+                address = best_poi.get("address", "")
+                name = best_poi.get("name", "")
+                return {
+                    'address': f"{address}{name}" if name not in address else address,
+                    'name': name,
+                    'type': best_poi.get("type", ""),
+                    'location': best_poi.get("location", ""),
+                    'tel': best_poi.get("tel", ""),
+                    'rating': best_poi.get("biz_ext", {}).get("rating", ""),
+                    'cost': best_poi.get("biz_ext", {}).get("cost", "")
+                }
+            else:
+                # 如果没有找到优先级POI，返回第一个结果
+                first_poi = data["pois"][0]
+                return {
+                    'address': first_poi.get("address", first_poi["name"]),
+                    'name': first_poi["name"],
+                    'type': first_poi.get("type", ""),
+                    'location': first_poi.get("location", ""),
+                    'tel': first_poi.get("tel", ""),
+                    'rating': first_poi.get("biz_ext", {}).get("rating", ""),
+                    'cost': first_poi.get("biz_ext", {}).get("cost", "")
+                }
+        return None
+    except Exception as e:
+        print(f"POI搜索失败: {e}")
+        return None
+
+def get_city_code_by_name(city_name):
+    """根据城市名称获取城市代码（adcode）"""
+    url = "https://restapi.amap.com/v3/config/district"
+    params = {
+        "key": AMAP_API_KEY,
+        "keywords": city_name,
+        "subdistrict": "0",  # 不获取下级行政区
+        "extensions": "base"
+    }
+    
+    try:
+        response = requests.get(url, params=params, timeout=5)
+        data = response.json()
+        
+        if data["status"] == "1" and data["districts"]:
+            # 返回第一个匹配的城市代码
+            return data["districts"][0]["adcode"]
+        return None
+    except Exception as e:
+        print(f"获取城市代码失败: {e}")
+        return None
+
+def calculate_poi_score(poi, priority_type, poi_priorities):
+    """计算POI的综合评分"""
+    base_score = len(poi_priorities) - poi_priorities.index(priority_type)
+    
+    # 加入评分权重
+    rating = poi.get("biz_ext", {}).get("rating", "0")
+    if rating and rating != "0":
+        try:
+            rating_score = float(rating) * 10
+            base_score += rating_score
+        except:
+            pass
+    
+    # 加入名称匹配度权重
+    name = poi.get("name", "")
+    keywords = ["景区", "公园", "博物馆", "寺", "庙", "山", "湖", "古", "文化", "历史"]
+    for keyword in keywords:
+        if keyword in name:
+            base_score += 5
+    
+    # 新增：名称中包含特定景点关键词时加分
+    name_lower = name.lower()
+    key_words = ["故宫", "颐和园", "天安门", "长城", "圆明园", "天坛", "鸟巢", "水立方"]
+    if any(word in name_lower for word in key_words):
+        base_score += 20  # 大幅提升匹配权重
+    
+    return base_score
+
+def geocode_address(address_info):
+    """使用高德地图API将地址转换为经纬度"""
+    if isinstance(address_info, dict):
+        address = address_info['address']
+        # 如果已有经纬度信息，直接使用
+        if address_info.get('location'):
+            try:
+                lng, lat = address_info['location'].split(',')
+                return float(lng), float(lat), address, address_info
+            except:
+                pass
+    else:
+        address = address_info
+        address_info = {
+            'address': address,
+            'name': address,
+            'type': '',
+            'location': '',
+            'tel': '',
+            'rating': '',
+            'cost': ''
+        }
+    
+    url = "https://restapi.amap.com/v3/geocode/geo"
+    params = {
+        "key": AMAP_API_KEY,
+        "address": address,
+        "output": "json"
+    }
+    try:
+        response = requests.get(url, params=params, timeout=5)
+        data = response.json()
+        if data["status"] == "1" and data["geocodes"]:
+            location = data["geocodes"][0]["location"]
+            lng, lat = location.split(",")
+            formatted_address = data["geocodes"][0]["formatted_address"]
+            return float(lng), float(lat), formatted_address, address_info
+        else:
+            print(f"地理编码失败，地址: {address}, 错误信息: {data.get('info', '未知错误')}")
+            return None, None, f"无法解析地址: {address}", address_info
+    except Exception as e:
+        print(f"地理编码错误: {e}，地址: {address}")
+        return None, None, f"地理编码错误: {str(e)}", address_info
+
+def get_city_code(lng, lat):
+    """根据经纬度获取城市代码"""
+    url = "https://restapi.amap.com/v3/geocode/regeo"
+    params = {
+        "key": AMAP_API_KEY,
+        "location": f"{lng},{lat}",
+        "extensions": "base",
+        "output": "json"
+    }
+    try:
+        response = requests.get(url, params=params)
+        data = response.json()
+        if data["status"] == "1":
+            return data["regeocode"]["addressComponent"]["adcode"]
+    except Exception as e:
+        print(f"获取城市代码失败: {str(e)}")
+    return None
+
+def calculate_route(start_lng, start_lat, end_lng, end_lat, transport_mode="driving"):
+    """使用高德地图API计算路线，支持不同交通方式"""
+    # 转换为API支持的模式，支持中文和英文输入
+    mode_map = {
+        "驾车": "driving",
+        "自驾": "driving",
+        "driving": "driving",
+        "公交": "transit",
+        "公共交通": "transit",
+        "transit": "transit",
+        "步行": "walking",
+        "走路": "walking",
+        "walking": "walking",
+        "骑行": "bicycling",
+        "自行车": "bicycling",
+        "bicycling": "bicycling"
+    }
+    
+    # 转换为API支持的模式，默认驾车
+    api_mode = mode_map.get(transport_mode.lower(), "driving")
+    
+    if api_mode == "driving":
+        url = "https://restapi.amap.com/v3/direction/driving"
+    elif api_mode == "transit":
+        url = "https://restapi.amap.com/v3/direction/transit/integrated"
+    elif api_mode == "walking":
+        url = "https://restapi.amap.com/v3/direction/walking"
+    elif api_mode == "bicycling":
+        url = "https://restapi.amap.com/v4/direction/bicycling"
+    else:
+        return {"success": False, "error": f"不支持的交通方式: {transport_mode}"}
+    
+    params = {
+        "key": AMAP_API_KEY,
+        "origin": f"{start_lng},{start_lat}",
+        "destination": f"{end_lng},{end_lat}",
+        "output": "json",
+        "extensions": "all"
+    }
+    
+    if api_mode == "transit":
+        city_code = get_city_code(start_lng, start_lat)
+        if city_code:
+            params["city"] = city_code
+            params["cityd"] = get_city_code(end_lng, end_lat) or city_code
+        else:
+            params["city"] = "110000"  # 默认北京
+            params["cityd"] = "110000"
+    
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        data = response.json()
+        
+        if data.get("status") == "1" and "route" in data:
+            if api_mode == "driving":
+                path = data["route"]["paths"][0]
+                polyline = path["steps"][0]["polyline"] if path["steps"] else ""
+                distance = path["distance"]
+                duration = path["duration"]
+                tolls = path.get("tolls", "0")
+                traffic_lights = path.get("traffic_lights", "0")
+            elif api_mode == "transit":
+                path = data["route"]["transits"][0]
+                polyline = extract_transit_polyline(path)
+                distance = path["distance"]
+                duration = path["duration"]
+                tolls = "0"
+                traffic_lights = "0"
+            elif api_mode == "walking":
+                path = data["route"]["paths"][0]
+                polyline = path["steps"][0]["polyline"] if path["steps"] else ""
+                distance = path["distance"]
+                duration = path["duration"]
+                tolls = "0"
+                traffic_lights = "0"
+            elif api_mode == "bicycling":
+                path = data["data"]["paths"][0]
+                polyline = path["polyline"]
+                distance = path["distance"]
+                duration = path["duration"]
+                tolls = "0"
+                traffic_lights = "0"
+            
+            return {
+                "polyline": polyline,
+                "distance": distance,
+                "duration": duration,
+                "tolls": tolls,
+                "traffic_lights": traffic_lights,
+                "success": True,
+                "transport_mode": api_mode
+            }
+        else:
+            error_info = data.get("info", "未知错误")
+            print(f"路线规划失败，起点: {start_lng},{start_lat}, 终点: {end_lng},{end_lat}, 错误信息: {error_info}")
+            return {"success": False, "error": f"路线规划失败: {error_info}"}
+    except Exception as e:
+        print(f"路线规划错误: {e}，起点: {start_lng},{start_lat}，终点: {end_lng},{end_lat}")
+        return {"success": False, "error": f"路线规划错误: {str(e)}"}
+
+def extract_transit_polyline(transit_path):
+    """从公交路线中提取折线数据"""
+    polylines = []
+    
+    for segment in transit_path.get("segments", []):
+        walking = segment.get("walking")
+        if walking and "polyline" in walking:
+            polylines.append(walking["polyline"])
+        
+        bus = segment.get("bus")
+        if bus:
+            buslines = bus.get("buslines", [])
+            for busline in buslines:
+                if "polyline" in busline:
+                    polylines.append(busline["polyline"])
+    
+    return ";".join(polylines)
+
+def generate_route_map(locations, routes, transport_mode, show_details, optimize_route):
+    """生成美化后的路线地图，包含自定义标记和路线"""
+    # 过滤无效位置
+    valid_locations = []
+    for loc in locations:
+        if len(loc) < 4:
+            print(f"无效位置格式: {loc}")
+            continue
+        lng, lat, addr, info = loc
+        if lng and lat:
+            valid_locations.append((lng, lat, addr, info))
+        else:
+            print(f"无效坐标: {loc}")
+    
+    if not valid_locations:
+        return "没有有效的地理坐标"
+    
+    # 计算中心点和缩放级别
+    center_lng = sum([loc[0] for loc in valid_locations]) / len(valid_locations)
+    center_lat = sum([loc[1] for loc in valid_locations]) / len(valid_locations)
+    
+    # 计算最大距离确定缩放级别
+    max_distance = calculate_max_distance(valid_locations)
+    zoom_level = calculate_zoom_level(max_distance)
+    
+    # 交通方式图标
+    transport_icons = {
+        "driving": "🚗",
+        "transit": "🚌", 
+        "walking": "🚶",
+        "bicycling": "🚲"
+    }
+    
+    # 景点类型图标映射
+    attraction_icons = {
+        "公园": "🌳", "博物馆": "🏛️", "寺庙": "🛕", "广场": "🟩", "山峰": "⛰️",
+        "湖泊": "💧", "古迹": "🏯", "建筑": "🏢", "酒店": "🏨", "餐厅": "🍴",
+        "商场": "🏬", "车站": "🚉", "机场": "✈️", "医院": "🏥", "学校": "🏫",
+        "银行": "🏦", "教堂": "⛪", "塔": "🗼", "桥": "🌉", "海滩": "🏖️"
+    }
+    
+    # 生成HTML地图
+    html_content = f"""
+    <div style='position: relative;'>
+        <div id="mapContainer" style='width: 100%; height: 600px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);'></div>
+        <div id="routeInfo" style='position: absolute; top: 10px; right: 10px; background: rgba(255,255,255,0.9); padding: 10px; border-radius: 5px; font-size: 14px; max-width: 200px;'></div>
+    </div>
+    <script src="https://webapi.amap.com/maps?v=2.0&key={AMAP_API_KEY}"></script>
+    <script src="https://webapi.amap.com/ui/1.1/main.js"></script>
+    <script>
+        var map = new AMap.Map('mapContainer', {{
+            center: [{center_lng}, {center_lat}],
+            zoom: {zoom_level},
+            viewMode: '3D'
+        }});
+        
+        // 使用现代地图样式
+        map.setMapStyle('amap://styles/fresh');
+        
+        var markers = [];
+        var infoWindows = [];
+    """
+    
+    # 添加景点标记
+    for i, (lng, lat, addr, info) in enumerate(valid_locations):
+        # 根据景点类型选择图标
+        icon = "📍"
+        poi_type = info.get('type', '')
+        for category, emoji in attraction_icons.items():
+            if category in poi_type or category in addr:
+                icon = emoji
+                break
+        
+        html_content += f"""
+        var marker{i} = new AMap.Marker({{
+            position: [{lng}, {lat}],
+            map: map,
+            content: '<div style="font-size: 24px; text-shadow: 2px 2px 4px rgba(0,0,0,0.3); cursor: pointer;" title="{addr}">{icon}</div>',
+            offset: new AMap.Pixel(-12, -24)
+        }});
+        
+        var infoWindow{i} = new AMap.InfoWindow({{
+            content: '<div style="padding: 15px; max-width: 320px; font-family: Arial, sans-serif;">' +
+                     '<div style="border-bottom: 2px solid #3366FF; padding-bottom: 8px; margin-bottom: 10px;">' +
+                     '<h3 style="margin: 0; color: #333; font-size: 18px;">{icon} {info.get("name", addr)}</h3>' +
+                     '</div>' +
+                     '<div style="margin-bottom: 8px;"><strong style="color: #666;">📍 地址:</strong> <span style="color: #333;">{addr}</span></div>' +
+                     '<div style="margin-bottom: 8px;"><strong style="color: #666;">🏷️ 类型:</strong> <span style="color: #333;">{info.get("type", "未知")}</span></div>' +
+                     {f'<div style="margin-bottom: 8px;"><strong style="color: #666;">📞 电话:</strong> <span style="color: #333;">{info.get("tel", "暂无")}</span></div>' if info.get("tel") else ''} +
+                     {f'<div style="margin-bottom: 8px;"><strong style="color: #666;">⭐ 评分:</strong> <span style="color: #FF6600;">{info.get("rating", "暂无")}</span></div>' if info.get("rating") else ''} +
+                     {f'<div style="margin-bottom: 8px;"><strong style="color: #666;">💰 人均:</strong> <span style="color: #333;">{info.get("cost", "暂无")}</span></div>' if info.get("cost") else ''} +
+                     '<div style="text-align: center; margin-top: 10px; padding-top: 10px; border-top: 1px solid #eee;">' +
+                     '<span style="background: #3366FF; color: white; padding: 4px 8px; border-radius: 12px; font-size: 12px;">景点 #{i+1}</span>' +
+                     '</div>' +
+                     '</div>',
+            offset: new AMap.Pixel(0, -30)
+        }});
+        
+        marker{i}.on('click', function() {{
+            infoWindows.forEach(function(window) {{
+                window.close();
+            }});
+            infoWindow{i}.open(map, marker{i}.getPosition());
+        }});
+        
+        markers.push(marker{i});
+        infoWindows.push(infoWindow{i});
+        """
+    
+    # 添加路线
+    if routes and show_details:
+        html_content += """
+        var polylines = [];
+        var routeInfoWindows = [];
+        """
+        
+        for i, route in enumerate(routes):
+            if route.get("success") and route.get("polyline"):
+                points = route["polyline"].split(';')
+                if len(points) > 1:
+                    try:
+                        path = [[float(p.split(',')[0]), float(p.split(',')[1])] for p in points if ',' in p]
+                        if path:
+                            # 根据交通方式设置样式
+                            transport_styles = {
+                                "driving": {"color": "#3366FF", "weight": 6, "opacity": 0.8, "icon": "🚗"},
+                                "transit": {"color": "#FF6600", "weight": 5, "opacity": 0.8, "icon": "🚌"},
+                                "walking": {"color": "#66CC66", "weight": 4, "opacity": 0.8, "icon": "🚶"},
+                                "bicycling": {"color": "#CC66CC", "weight": 5, "opacity": 0.8, "icon": "🚲"}
+                            }
+                            
+                            style = transport_styles.get(route["transport_mode"], transport_styles["driving"])
+                            
+                            # 修复parseInt问题：确保duration是数值类型
+                            duration_seconds = 0
+                            try:
+                                duration_seconds = parseInt(route.get("duration", "0"));
+                            except:
+                                duration_seconds = 0;
+                                
+                            html_content += f"""
+                            var polyline{i} = new AMap.Polyline({{
+                                path: {path},
+                                strokeColor: '{style["color"]}',
+                                strokeWeight: {style["weight"]},
+                                strokeOpacity: {style["opacity"]},
+                                lineJoin: 'round',
+                                lineCap: 'round',
+                                zIndex: 50,
+                                map: map,
+                                cursor: 'pointer'
+                            }});
+                            
+                            var routeInfoWindow{i} = new AMap.InfoWindow({{
+                                content: '<div style="padding: 15px; max-width: 280px; font-family: Arial, sans-serif;">' +
+                                         '<div style="border-bottom: 2px solid {style["color"]}; padding-bottom: 8px; margin-bottom: 10px;">' +
+                                         '<h3 style="margin: 0; color: #333; font-size: 16px;">{style["icon"]} 路线 {i+1}</h3>' +
+                                         '</div>' +
+                                         '<div style="margin-bottom: 8px;"><strong style="color: #666;">🚀 交通方式:</strong> <span style="color: #333;">{get_transport_name(route["transport_mode"])}</span></div>' +
+                                         '<div style="margin-bottom: 8px;"><strong style="color: #666;">📏 距离:</strong> <span style="color: #333; font-weight: bold;">{(parseFloat(route.get("distance", 0))/1000).toFixed(2)} 公里</span></div>' +
+                                         '<div style="margin-bottom: 8px;"><strong style="color: #666;">⏱️ 预计时间:</strong> <span style="color: #333; font-weight: bold;">{format_duration(duration_seconds)}</span></div>' +
+                                         {f'<div style="margin-bottom: 8px;"><strong style="color: #666;">💰 过路费:</strong> <span style="color: #FF6600; font-weight: bold;">{route.get("tolls", "0")} 元</span></div>' if route.get("tolls") and route.get("tolls") != "0" else ''} +
+                                         {f'<div style="margin-bottom: 8px;"><strong style="color: #666;">🚦 红绿灯:</strong> <span style="color: #333;">{route.get("traffic_lights", "0")} 个</span></div>' if route.get("traffic_lights") and route.get("traffic_lights") != "0" else ''} +
+                                         '<div style="text-align: center; margin-top: 10px; padding-top: 10px; border-top: 1px solid #eee;">' +
+                                         '<span style="font-size: 12px; color: #999;">点击路线查看详情</span>' +
+                                         '</div>' +
+                                         '</div>',
+                                offset: new AMap.Pixel(0, -30)
+                            }});
+                            
+                            polyline{i}.on('click', function(e) {{
+                                routeInfoWindows.forEach(function(window) {{
+                                    window.close();
+                                }});
+                                routeInfoWindow{i}.open(map, e.lnglat);
+                            }});
+                            
+                            polyline{i}.on('mouseover', function() {{
+                                polyline{i}.setOptions({{
+                                    strokeWeight: {style["weight"] + 2},
+                                    strokeOpacity: 1.0
+                                }});
+                            }});
+                            
+                            polyline{i}.on('mouseout', function() {{
+                                polyline{i}.setOptions({{
+                                    strokeWeight: {style["weight"]},
+                                    strokeOpacity: {style["opacity"]}
+                                }});
+                            }});
+                            
+                            polylines.push(polyline{i});
+                            routeInfoWindows.push(routeInfoWindow{i});
+                            """
+                    except Exception as e:
+                        print(f"路线 {i} 绘制失败: {e}")
+    
+    # 添加地图控件和功能
+    html_content += f"""
+        // 添加地图控件
+        map.addControl(new AMap.ToolBar({{
+            position: 'LT'
+        }}));
+        map.addControl(new AMap.Scale({{
+            position: 'LB'
+        }}));
+        
+        // 添加路线总览信息
+        function updateRouteInfo() {{
+            var totalDistance = 0;
+            var totalDuration = 0;
+            var routeCount = 0;
+            
+            {generate_route_summary_js(routes) if routes else ""}
+            
+            if (routeCount > 0) {{
+                document.getElementById('routeInfo').innerHTML = 
+                    '<div style="font-weight: bold; margin-bottom: 5px; color: #333;">🗺️ 路线总览</div>' +
+                    '<div style="font-size: 12px; color: #666;">📍 {len(valid_locations)} 个景点</div>' +
+                    '<div style="font-size: 12px; color: #666;">🛣️ ' + routeCount + ' 段路线</div>' +
+                    '<div style="font-size: 12px; color: #666;">📏 总距离: ' + (totalDistance/1000).toFixed(2) + ' 公里</div>' +
+                    '<div style="font-size: 12px; color: #666;">⏱️ 总时间: ' + Math.round(totalDuration/60) + ' 分钟</div>';
+            }}
+        }}
+        
+        // 自动调整地图视野
+        function fitMapView() {{
+            var bounds = new AMap.Bounds();
+            markers.forEach(function(marker) {{
+                bounds.extend(marker.getPosition());
+            }});
+            
+            if (markers.length > 1) {{
+                map.setBounds(bounds, false, [20, 20, 20, 20]);
+            }} else if (markers.length === 1) {{
+                map.setCenter(markers[0].getPosition());
+                map.setZoom(15);
+            }}
+        }}
+        
+        // 添加地图点击事件，关闭所有信息窗口
+        map.on('click', function() {{
+            infoWindows.forEach(function(window) {{
+                window.close();
+            }});
+            routeInfoWindows.forEach(function(window) {{
+                window.close();
+            }});
+        }});
+        
+        // 初始化
+        setTimeout(function() {{
+            fitMapView();
+            updateRouteInfo();
+        }}, 500);
+        
+        // 辅助函数
+        function getTransportName(mode) {{
+            var names = {{
+                'driving': '自驾',
+                'transit': '公交',
+                'walking': '步行',
+                'bicycling': '骑行'
+            }};
+            return names[mode] || mode;
+        }}
+        
+        function formatDuration(seconds) {{
+            var hours = Math.floor(seconds / 3600);
+            var minutes = Math.floor((seconds % 3600) / 60);
+            if (hours > 0) {{
+                return hours + '小时' + minutes + '分钟';
+            }} else {{
+                return minutes + '分钟';
+            }}
+        }}
+    </script>
+    """
+    
+    return html_content
+
+def calculate_max_distance(locations):
+    """计算地点间的最大距离（用于确定缩放级别）"""
+    max_dist = 0
+    for i in range(len(locations)):
+        for j in range(i + 1, len(locations)):
+            lng1, lat1 = locations[i][0], locations[i][1]
+            lng2, lat2 = locations[j][0], locations[j][1]
+            dist = math.sqrt((lng2 - lng1)**2 + (lat2 - lat1)**2)
+            max_dist = max(max_dist, dist)
+    return max_dist
+
+def calculate_zoom_level(max_distance):
+    """根据最大距离计算合适的缩放级别"""
+    if max_distance > 5:
+        return 6
+    elif max_distance > 2:
+        return 8
+    elif max_distance > 1:
+        return 10
+    elif max_distance > 0.5:
+        return 11
+    elif max_distance > 0.1:
+        return 13
+    else:
+        return 15
+
+def generate_route_summary_js(routes):
+    """生成路线摘要的JavaScript代码"""
+    if not routes:
+        return ""
+    
+    js_code = ""
+    for i, route in enumerate(routes):
+        if route.get("success"):
+            js_code += f"""
+            totalDistance += {route.get('distance', 0)};
+            totalDuration += {route.get('duration', 0)};
+            routeCount++;
+            """
+    return js_code
+
+def get_transport_name(transport_mode):
+    """获取交通方式的中文名称"""
+    names = {
+        "driving": "自驾",
+        "transit": "公交",
+        "walking": "步行",
+        "bicycling": "骑行"
+    }
+    return names.get(transport_mode, transport_mode)
+
+def format_duration(seconds):
+    """格式化时间显示"""
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    if hours > 0:
+        return f"{hours}小时{minutes}分钟"
+    else:
+        return f"{minutes}分钟"
