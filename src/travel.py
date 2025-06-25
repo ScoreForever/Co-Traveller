@@ -139,6 +139,10 @@ def generate_travel_plan(place1, date1, place2, date2):
             # 上午活动
             activity_time = "上午"
             activity_place = random.choice(attractions)
+            # Define morning_activities if not already defined
+            morning_activities = ["参观", "品尝当地早餐", "参加文化体验活动"]
+            # Define morning_activities if not already defined
+            morning_activities = ["参观", "品尝当地早餐", "参加文化体验活动"]
             activity_action = random.choice(morning_activities)
             activity_transport = random.choice(["公交", "地铁", "步行", "出租车"])
             travel_plan_data.append([f"Day{i+1}（{cur_date.strftime('%Y-%m-%d')}）", activity_time, activity_place, activity_action, activity_transport])
@@ -338,6 +342,7 @@ def generate_travel_plan_multi_v2(place1, date1, dests, date2):
         # 均分天数给每个目的地
         days_per_dest = total_days // len(dests)
         extra_days = total_days % len(dests)
+        all_attractions = []  # Define all_attractions as an empty list
         for i, dest in enumerate(dests):
             stay_days = days_per_dest + (1 if i < extra_days else 0)
             attractions = [f"{dest}景点{j}" for j in range(1, 4)]
@@ -346,21 +351,21 @@ def generate_travel_plan_multi_v2(place1, date1, dests, date2):
                 # 上午活动
                 activity_time = "上午"
                 activity_place = random.choice(attractions)
-                activity_action = random.choice(morning_activities)
+                activity_action = random.choice(morning_activities) # type: ignore
                 activity_transport = random.choice(["公交", "地铁", "步行", "出租车"])
                 travel_plan_data.append([f"Day{day_idx}（{cur_date.strftime('%Y-%m-%d')}）", activity_time, activity_place, activity_action, activity_transport])
 
                 # 下午活动
                 activity_time = "下午"
                 activity_place = random.choice(attractions)
-                activity_action = random.choice(afternoon_activities)
+                activity_action = random.choice(afternoon_activities) # type: ignore
                 activity_transport = random.choice(["公交", "地铁", "步行", "出租车"])
                 travel_plan_data.append([f"Day{day_idx}（{cur_date.strftime('%Y-%m-%d')}）", activity_time, activity_place, activity_action, activity_transport])
 
                 # 晚上活动
                 activity_time = "晚上"
                 activity_place = random.choice(attractions)
-                activity_action = random.choice(evening_activities)
+                activity_action = random.choice(evening_activities) # type: ignore
                 activity_transport = random.choice(["公交", "地铁", "步行", "出租车"])
                 travel_plan_data.append([f"Day{day_idx}（{cur_date.strftime('%Y-%m-%d')}）", activity_time, activity_place, activity_action, activity_transport])
 
@@ -684,7 +689,7 @@ def process_speech(audio_data, chat_history, baidu_api_key, baidu_secret_key, op
     elif isinstance(audio_data, tuple):  # 麦克风输入 (sample_rate, audio_array)
         _, audio_array = audio_data
         # 创建临时文件
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+        with temp_file.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
             audio_path = temp_file.name
             # 将numpy数组转换为音频文件
             audio = AudioSegment(
@@ -967,7 +972,7 @@ with gr.Blocks() as demo:
         )
         
         save_btn.click(
-            fn=lambda p1, d1, *args: save_travel_plan(
+            fn=lambda p1, d1, *args: save_travel_plan( # type: ignore
                 p1, d1, args[0] if args[0] else "", args[-2] if len(args) > 1 else "", args[-3], args[-4], args[-1]
             ),
             inputs=[place1, date1] + dest_inputs + [date2, ticket_url_output, travel_plan_output, filename_input],
@@ -1197,6 +1202,224 @@ with gr.Blocks() as demo:
             fn=process_route,
             inputs=[start_location, end_location],
             outputs=[summary, map_display, step_instructions]
+        )
+    # 票务查询Tab
+    with gr.Tab("🎫 票务查询"):
+        gr.Markdown("### 查询火车票和机票信息")
+        
+        with gr.Row():
+            with gr.Column():
+                departure_place = gr.Textbox(label="出发地", placeholder="例如：北京")
+                arrival_place = gr.Textbox(label="目的地", placeholder="例如：上海")
+                departure_date = gr.Textbox(label="出发日期", placeholder="YYYY-MM-DD")
+                return_date = gr.Textbox(label="返回日期（可选）", placeholder="YYYY-MM-DD")
+                
+                ticket_type = gr.Radio(
+                    choices=["单程", "往返"],
+                    label="票务类型",
+                    value="单程"
+                )
+                
+                transport_type = gr.Radio(
+                    choices=["火车", "飞机"],
+                    label="交通工具",
+                    value="火车"
+                )
+                
+                search_btn = gr.Button("🔍 查询票务", variant="primary")
+                clear_btn = gr.Button("清除")
+            
+            with gr.Column():
+                gr.Markdown("### 票务查询结果")
+                
+                # 火车票表格
+                with gr.Tab("火车票"):
+                    train_tickets_output = gr.Dataframe(
+                        headers=["车次", "出发站", "到达站", "出发时间", "到达时间", "历时", "商务座", "一等座", "二等座", "硬座", "硬卧", "软卧"],
+                        label="火车票信息",
+                        interactive=False
+                    )
+                    
+                    train_price_plot = gr.Plot(label="票价趋势图")
+                
+                # 机票表格
+                with gr.Tab("机票"):
+                    flight_tickets_output = gr.Dataframe(
+                        headers=["航空公司", "航班号", "出发机场", "到达机场", "出发时间", "到达时间", "历时", "价格", "舱位"],
+                        label="机票信息",
+                        interactive=False
+                    )
+                    
+                    flight_price_plot = gr.Plot(label="票价趋势图")
+        
+        # 票务查询函数
+        def search_tickets(departure_place, arrival_place, departure_date, return_date, ticket_type, transport_type):
+            """模拟查询火车票和机票信息"""
+            if not departure_place or not arrival_place or not departure_date:
+                if transport_type == "火车":
+                    return pd.DataFrame(columns=["车次", "出发站", "到达站", "出发时间", "到达时间", "历时", "商务座", "一等座", "二等座", "硬座", "硬卧", "软卧"]), None
+                else:
+                    return pd.DataFrame(columns=["航空公司", "航班号", "出发机场", "到达机场", "出发时间", "到达时间", "历时", "价格", "舱位"]), None
+            
+            # 验证日期格式
+            if not is_valid_date(departure_date):
+                if transport_type == "火车":
+                    return pd.DataFrame(columns=["车次", "出发站", "到达站", "出发时间", "到达时间", "历时", "商务座", "一等座", "二等座", "硬座", "硬卧", "软卧"]), None
+                else:
+                    return pd.DataFrame(columns=["航空公司", "航班号", "出发机场", "到达机场", "出发时间", "到达时间", "历时", "价格", "舱位"]), None
+            
+            # 验证返程日期
+            if ticket_type == "往返" and return_date and not is_valid_date(return_date):
+                if transport_type == "火车":
+                    return pd.DataFrame(columns=["车次", "出发站", "到达站", "出发时间", "到达时间", "历时", "商务座", "一等座", "二等座", "硬座", "硬卧", "软卧"]), None
+                else:
+                    return pd.DataFrame(columns=["航空公司", "航班号", "出发机场", "到达机场", "出发时间", "到达时间", "历时", "价格", "舱位"]), None
+            
+            # 模拟生成票务数据
+            if transport_type == "火车":
+                # 模拟火车票数据
+                train_data = []
+                for i in range(1, 11):
+                    # 随机生成车次
+                    train_number = f"G{i:03d}" if random.random() > 0.5 else f"D{i:03d}"
+                    
+                    # 随机生成时间
+                    dep_hour = random.randint(6, 22)
+                    dep_minute = random.choice([0, 15, 30, 45])
+                    departure_time = f"{dep_hour:02d}:{dep_minute:02d}"
+                    
+                    # 随机生成历时
+                    duration_hours = random.randint(1, 10)
+                    duration_minutes = random.choice([0, 15, 30, 45])
+                    duration = f"{duration_hours}小时{duration_minutes}分钟"
+                    
+                    # 计算到达时间
+                    dep_datetime = datetime.strptime(f"{departure_date} {departure_time}", "%Y-%m-%d %H:%M")
+                    arr_datetime = dep_datetime + timedelta(hours=duration_hours, minutes=duration_minutes)
+                    arrival_time = arr_datetime.strftime("%H:%M")
+                    
+                    # 随机生成票价
+                    business_price = round(random.uniform(800, 2000), 2) if random.random() > 0.3 else ""
+                    first_price = round(random.uniform(500, 1200), 2) if random.random() > 0.3 else ""
+                    second_price = round(random.uniform(300, 800), 2) if random.random() > 0.1 else ""
+                    hard_seat = round(random.uniform(100, 300), 2) if train_number.startswith("D") and random.random() > 0.5 else ""
+                    hard_sleep = round(random.uniform(200, 500), 2) if train_number.startswith("D") and random.random() > 0.5 else ""
+                    soft_sleep = round(random.uniform(400, 800), 2) if train_number.startswith("D") and random.random() > 0.7 else ""
+                    
+                    train_data.append([
+                        train_number, 
+                        departure_place, 
+                        arrival_place, 
+                        departure_time, 
+                        arrival_time, 
+                        duration, 
+                        business_price, 
+                        first_price, 
+                        second_price, 
+                        hard_seat, 
+                        hard_sleep, 
+                        soft_sleep
+                    ])
+                
+                # 创建DataFrame
+                train_df = pd.DataFrame(
+                    train_data, 
+                    columns=["车次", "出发站", "到达站", "出发时间", "到达时间", "历时", "商务座", "一等座", "二等座", "硬座", "硬卧", "软卧"]
+                )
+                
+                # 创建票价趋势图
+                days = [datetime.strptime(departure_date, "%Y-%m-%d") + timedelta(days=i) for i in range(-3, 4)]
+                dates = [day.strftime("%Y-%m-%d") for day in days]
+                prices = [round(random.uniform(300, 800), 2) for _ in range(7)]
+                
+                fig = go.Figure(data=go.Scatter(x=dates, y=prices, mode='lines+markers'))
+                fig.update_layout(
+                    title=f"{departure_place}到{arrival_place}二等座票价趋势",
+                    xaxis_title="日期",
+                    yaxis_title="价格(元)"
+                )
+                
+                return train_df, fig
+            
+            else:
+                # 模拟机票数据
+                airlines = ["中国国航", "东方航空", "南方航空", "海南航空", "厦门航空", "深圳航空", "四川航空", "吉祥航空", "春秋航空"]
+                flight_data = []
+                
+                for i in range(1, 11):
+                    # 随机生成航空公司和航班号
+                    airline = random.choice(airlines)
+                    flight_number = f"{airline[:2]}{random.randint(1000, 9999)}"
+                    
+                    # 随机生成机场
+                    departure_airport = f"{departure_place}机场"
+                    arrival_airport = f"{arrival_place}机场"
+                    
+                    # 随机生成时间
+                    dep_hour = random.randint(6, 22)
+                    dep_minute = random.choice([0, 15, 30, 45])
+                    departure_time = f"{dep_hour:02d}:{dep_minute:02d}"
+                    
+                    # 随机生成历时
+                    duration_hours = random.randint(1, 5)
+                    duration_minutes = random.choice([0, 15, 30, 45])
+                    duration = f"{duration_hours}小时{duration_minutes}分钟"
+                    
+                    # 计算到达时间
+                    dep_datetime = datetime.strptime(f"{departure_date} {departure_time}", "%Y-%m-%d %H:%M")
+                    arr_datetime = dep_datetime + timedelta(hours=duration_hours, minutes=duration_minutes)
+                    arrival_time = arr_datetime.strftime("%H:%M")
+                    
+                    # 随机生成票价和舱位
+                    price = round(random.uniform(500, 3000), 2)
+                    cabin = random.choice(["经济舱", "超级经济舱", "商务舱", "头等舱"])
+                    
+                    flight_data.append([
+                        airline, 
+                        flight_number, 
+                        departure_airport, 
+                        arrival_airport, 
+                        departure_time, 
+                        arrival_time, 
+                        duration, 
+                        price, 
+                        cabin
+                    ])
+                
+                # 创建DataFrame
+                flight_df = pd.DataFrame(
+                    flight_data, 
+                    columns=["航空公司", "航班号", "出发机场", "到达机场", "出发时间", "到达时间", "历时", "价格", "舱位"]
+                )
+                
+                # 创建票价趋势图
+                days = [datetime.strptime(departure_date, "%Y-%m-%d") + timedelta(days=i) for i in range(-3, 4)]
+                dates = [day.strftime("%Y-%m-%d") for day in days]
+                prices = [round(random.uniform(500, 3000), 2) for _ in range(7)]
+                
+                fig = go.Figure(data=go.Scatter(x=dates, y=prices, mode='lines+markers'))
+                fig.update_layout(
+                    title=f"{departure_place}到{arrival_place}经济舱票价趋势",
+                    xaxis_title="日期",
+                    yaxis_title="价格(元)"
+                )
+                
+                return flight_df, fig
+        # 设置按钮事件
+        search_btn.click(
+            fn=lambda dp, ap, dd, rd, tt, tp: search_tickets(dp, ap, dd, rd, tt, tp),
+            inputs=[departure_place, arrival_place, departure_date, return_date, ticket_type, transport_type],
+            outputs=[train_tickets_output if transport_type == "火车" else flight_tickets_output, 
+                    train_price_plot if transport_type == "火车" else flight_price_plot]
+        )
+        
+        clear_btn.click(
+            fn=lambda: [None, None, None, None, "单程", "火车", 
+                    pd.DataFrame(columns=["车次", "出发站", "到达站", "出发时间", "到达时间", "历时", "商务座", "一等座", "二等座", "硬座", "硬卧", "软卧"]), None,
+                    pd.DataFrame(columns=["航空公司", "航班号", "出发机场", "到达机场", "出发时间", "到达时间", "历时", "价格", "舱位"]), None],
+            inputs=[],
+            outputs=[departure_place, arrival_place, departure_date, return_date, ticket_type, transport_type,
+                    train_tickets_output, train_price_plot, flight_tickets_output, flight_price_plot]
         )
     # 天气查询Tab
     with gr.Tab("🌦️ 地点天气查询"):
