@@ -1374,7 +1374,7 @@ with gr.Blocks() as demo:
         
         with gr.Row():
             with gr.Column(scale=1):
-                file_selector = gr.Dropdown(label="选择行程")
+                file_selector = gr.Dropdown(choices=[], value=None, label="选择行程", allow_custom_value=True)
                 load_btn = gr.Button("加载行程")
                 delete_btn = gr.Button("删除行程")
             with gr.Column(scale=2):
@@ -1430,7 +1430,7 @@ with gr.Blocks() as demo:
     env_vars = load_env(env_path)
     os.environ.update(env_vars)
 
-    # ✅ 2. 加载 PDF 并构建检索系统（初始化一次即可）
+    #✅ 2. 加载 PDF 并构建检索系统（初始化一次即可）
     try:
         dataset_dir = Path(__file__).resolve().parent.parent / "dataset"
         rag_docs = load_pdfs_from_folder(dataset_dir)
@@ -1446,6 +1446,7 @@ with gr.Blocks() as demo:
         pass  # 注释或跳过文档加载逻辑
     except Exception as e:
         print(f"文档检索功能已跳过：{e}")
+    
 
     # ✅ 3. RAG 问答界面
     with gr.Tab("📚 文档问答助手"):

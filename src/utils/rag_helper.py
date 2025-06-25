@@ -11,7 +11,29 @@ import sseclient
 import json
 
 # 远程 Qwen API 流式响应封装
+# def stream_qwen_response(prompt):
+#     api_key = os.getenv("sub_SILICON_API_KEY")
+#     if not api_key:
+#         raise ValueError("请设置 sub_SILICON_API_KEY 环境变量")
+
+#     headers = {
+#         "Authorization": f"Bearer {api_key}",
+#         "Accept": "text/event-stream",
+#         "Content-Type": "application/json"
+#     }
+#     payload = {
+#         "model": "Qwen/Qwen3-8B",
+#         "stream": True,
+#         "messages": [
+#             {"role": "system", "content": "你是一个友好的中文助手。"},
+#             {"role": "user", "content": prompt}
+#         ]
+#     }
 def stream_qwen_response(prompt):
+    import os
+    import requests
+    import json
+
     api_key = os.getenv("SILICON_API_KEY")
     if not api_key:
         raise ValueError("请设置 SILICON_API_KEY 环境变量")
@@ -33,7 +55,31 @@ def stream_qwen_response(prompt):
     with requests.post("https://api.siliconflow.cn/v1/chat/completions", headers=headers, json=payload, stream=True) as response:
         if response.status_code != 200:
             raise RuntimeError(f"请求失败：{response.status_code} {response.text}")
+        response.encoding = "utf-8"
+        for line in response.iter_lines(decode_unicode=True):
+            if not line or not line.startswith("data: "):
+                continue
 
+            data = line.removeprefix("data: ").strip()
+            if data == "[DONE]":
+                break
+
+            try:
+                delta = json.loads(data)
+                content = delta.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                if content:
+                    yield content
+            except json.JSONDecodeError as e:
+                # 不再输出报错，避免污染 UI 显示
+                continue
+
+    with requests.post("https://api.siliconflow.cn/v1/chat/completions", headers=headers, json=payload, stream=True) as response:
+        if response.status_code != 200:
+            raise RuntimeError(f"请求失败：{response.status_code} {response.text}")
+
+        # 检查是否为流式返回
+        if "text/event-stream" not in response.headers.get("Content-Type", ""):
+            raise RuntimeError(f"不是 SSE 流式返回，而是：{response.headers.get('Content-Type')}")
         client = sseclient.SSEClient(response)
         for event in client.events():
             if event.data == "[DONE]":
@@ -76,7 +122,7 @@ def build_retriever_from_docs(documents):
 
 # 构建搜索函数（对检索结果进行流式总结）
 def stream_search_docs(query, retriever):
-    results = retriever.get_relevant_documents(query)
+    results = retriever.invoke(query)  # 使用新版 API
     if not results:
         yield "未找到相关内容"
         return
@@ -92,7 +138,8 @@ def stream_search_docs(query, retriever):
         for chunk in stream_qwen_response(prompt):
             yield chunk
     except Exception as e:
-        yield f"大模型总结失败，改为显示原文：\n\n{combined_text}"
+        #yield f"大模型总结失败：{e}，改为显示原文：\n\n{combined_text}"
+        return
 
 # 加载环境变量
 def load_env(filepath):
