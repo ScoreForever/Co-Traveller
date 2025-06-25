@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 import subprocess
 import sys
 import os
+import math 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from src.utils.rag_helper import load_pdfs_from_folder, build_retriever_from_docs, stream_search_docs
 load_dotenv()
@@ -649,108 +650,16 @@ def delete_travel_plan(filename):
         return "旅行计划已删除", list_saved_plans()
     except Exception as e:
         return f"删除失败: {str(e)}", list_saved_plans()
-#新增函数
-def generate_route_map(places_str, transport, optimize, show_details):
-    """生成路线地图和路线信息"""
-    if not places_str.strip():
-        return "请输入景点或地址", "请输入景点或地址"
-    
-    # 解析景点列表
-    places = [p.strip() for p in places_str.split('，') if p.strip()]
-    if len(places) < 2:
-        return "请至少输入两个景点或地址", "请至少输入两个景点或地址"
-    
-    # 获取景点经纬度
-    locations = []
-    valid_places = []
-    invalid_places = []
-    
-    for place in places:
-        # 先通过POI搜索获取地址信息
-        poi_info = amap.search_poi(place)
-        if not poi_info:
-            print(f"POI搜索失败: {place}")
-            invalid_places.append(place)
-            continue
-        
-        # 地理编码
-        lng, lat, formatted_addr, address_info = amap.geocode_address(poi_info)
-        if lng and lat:
-            # 确保传递4个元素：lng, lat, formatted_addr, address_info
-            locations.append((lng, lat, formatted_addr, address_info))
-            valid_places.append(formatted_addr)
-        else:
-            print(f"地理编码失败: {place}")
-            invalid_places.append(place)
-    
-    if not locations:
-        return "无法解析任何地址", "无法解析任何地址"
-    
-    # 优化路线顺序（如果需要）
-    if optimize and len(locations) > 2:
-        try:
-            # 优化路线顺序
-            locations = amap.optimize_route_order(locations)
-        except Exception as e:
-            print(f"路线优化失败: {e}")
-    
-    # 计算路线
-    routes = []
-    if len(locations) > 1:
-        for i in range(len(locations) - 1):
-            start_lng, start_lat, start_addr, start_info = locations[i]
-            end_lng, end_lat, end_addr, end_info = locations[i + 1]
-            
-            # 确保起点和终点有效
-            if not all([start_lng, start_lat, end_lng, end_lat]):
-                print(f"跳过无效路线: {start_addr} -> {end_addr}")
-                continue
-                
-            route = amap.calculate_driving_route(start_lng, start_lat, end_lng, end_lat)  # 正确函数
-            
-            if route["success"]:
-                routes.append(route)
-                print(f"成功计算路线: {start_addr} -> {end_addr}")
-            else:
-                print(f"路线计算失败: {start_addr} -> {end_addr}")
-    
-    # 生成地图和路线信息
-    try:
-        map_html = amap.generate_route_map(
-            locations, 
-            routes,
-            transport_mode=transport,
-            show_details=show_details,
-            optimize_route=optimize
-        )
-        
-        # 生成路线信息文本
-        route_text = "路线规划结果:\n\n"
-        if invalid_places:
-            route_text += f"⚠️ 无法解析以下地址: {', '.join(invalid_places)}\n\n"
-        
-        route_text += "✅ 有效景点:\n"
-        for i, (lng, lat, addr, info) in enumerate(locations):
-            route_text += f"{i+1}. {addr} (经度: {lng}, 纬度: {lat})\n"
-        
-        if routes:
-            route_text += "\n🚗 路线详情:\n"
-            for i, route in enumerate(routes):
-                if route["success"]:
-                    distance = float(route["distance"]) / 1000
-                    duration = int(route["duration"]) // 60
-                    start = locations[i][2]
-                    end = locations[i+1][2]
-                    route_text += f"{i+1}. {start} → {end}: {distance:.2f}公里, {duration}分钟\n"
-        
-        return map_html, route_text
-        
-    except Exception as e:
-        print(f"生成地图失败: {e}")
-        return f"生成地图失败: {str(e)}", "请检查输入参数"
+
 
 # 创建界面
-with gr.Blocks() as demo:
+css = """
+#map-container {
+    height: 500px !important;
+    min-height: 500px;
+}
+"""
+with gr.Blocks(css=css) as demo:
     gr.Markdown("# 🧳 旅行助手")
     
     # 查票与行程规划Tab
@@ -875,7 +784,7 @@ with gr.Blocks() as demo:
     
     with gr.Tab("🗺️ 路线规划"):
         gr.Markdown("# 🗺️ 高德地图路线规划")
-        gr.Markdown("输入起点和终点的位置名称（如：北京天安门、上海东方明珠），自动计算最佳驾车路线")
+        gr.Markdown("输入起点和终点的位置名称（如：北京天安门、上海东方明珠），自动计算最佳路线")
         
         with gr.Row():
             with gr.Column(scale=1):
@@ -897,18 +806,18 @@ with gr.Blocks() as demo:
                 
                 submit_btn = gr.Button("🚗 规划路线", variant="primary")
                 
-                # 添加路线类型选择下拉框
+                # 路线类型选择（移除了步行选项）
                 route_type = gr.Dropdown(
                     label="路线类型",
-                    choices=["驾车", "公交", "步行"],
+                    choices=["驾车", "公交"],  # 移除了步行选项
                     value="驾车"
                 )
                 
+                # 更新示例（移除了步行示例）
                 gr.Examples(
                     examples=[
                         ["北京天安门", "北京颐和园", "驾车"],
-                        ["上海外滩", "上海东方明珠", "公交"],
-                        ["广州塔", "广州白云机场", "步行"]
+                        ["上海外滩", "上海东方明珠", "公交"]
                     ],
                     inputs=[start_location, end_location, route_type],
                     label="示例路线"
@@ -924,7 +833,17 @@ with gr.Blocks() as demo:
                     gr.Markdown("### 🗺️ 路线地图")
                     map_display = gr.HTML(
                         label="路线可视化",
-                        value="<div style='min-height:400px; display:flex; align-items:center; justify-content:center; background:#f0f0f0; border-radius:10px;'>等待路线规划...</div>"
+                        value="""
+                        <div style="
+                            min-height: 500px; 
+                            background: #f8f9fa;
+                            border-radius: 15px;
+                            padding: 20px;
+                            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                        ">
+                            <div id="map-container" style="height: 100%; width: 100%"></div>
+                        </div>
+                        """
                     )
                 
                 with gr.Group():
@@ -934,7 +853,8 @@ with gr.Blocks() as demo:
             submit_btn.click(
                 fn=process_route,
                 inputs=[start_location, end_location, route_type],
-                outputs=[summary, map_display, step_instructions])
+                outputs=[summary, map_display, step_instructions]
+            )
 
     # 天气查询Tab
     with gr.Tab("🌦️ 地点天气查询"):

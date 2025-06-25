@@ -8,6 +8,10 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 import time
 import tempfile
+import base64
+import io
+import os
+
 # 高德地图API配置
 AMAP_API_KEY = ""  # 将在travel.py中设置
 
@@ -18,6 +22,22 @@ AMAP_API_KEY = None
 def set_amap_api_key(api_key):
     global AMAP_API_KEY
     AMAP_API_KEY = api_key
+
+# 0528最新修改：增加POI评分计算函数
+def calculate_poi_score(poi, priority_type, poi_priorities):
+    """计算POI评分"""
+    score = 0
+    
+    # 基于类型优先级评分
+    if priority_type in poi_priorities:
+        score += (len(poi_priorities) - poi_priorities.index(priority_type)) * 100
+    
+    # 基于评分评分
+    rating = poi.get("biz_ext", {}).get("rating", "")
+    if rating and rating.replace(".", "").isdigit():
+        score += float(rating) * 10
+    
+    return score
 
 def search_poi(keyword):
     """使用高德POI搜索API将关键词转换为地址"""
@@ -130,36 +150,6 @@ def geocode_location(location_name: str) -> Optional[Tuple[float, float]]:
     except:
         return None
 
-def calculate_walking_route(start_lng: float, start_lat: float, end_lng: float, end_lat: float):
-    url = "https://restapi.amap.com/v3/direction/walking"
-    params = {
-        "key": AMAP_API_KEY,
-        "origin": f"{start_lng},{start_lat}",
-        "destination": f"{end_lng},{end_lat}",
-        "output": "json"
-    }
-    
-    try:
-        response = requests.get(url, params=params, timeout=10)
-        data = response.json()
-        
-        if data.get("status") != "1":
-            return {"success": False, "error": f"步行路线请求失败: {data.get('info', '未知错误')}"}
-            
-        route = data.get("route", {})
-        paths = route.get("paths", [{}])
-        best_path = paths[0]
-        
-        return {
-            "success": True,
-            "distance": best_path.get("distance", 0),
-            "duration": best_path.get("duration", 0),
-            "steps": [{"instruction": step["instruction"]} for step in best_path.get("steps", [])],
-            "polyline": best_path.get("polyline", "")
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
 def calculate_driving_route(
     start_lng: float, start_lat: float, 
     end_lng: float, end_lat: float
@@ -213,7 +203,7 @@ def calculate_driving_route(
             result["polyline"] = best_route["polyline"]
         elif "steps" in best_route:
             polyline_points = [step.get("polyline", "") for step in best_route["steps"] if step.get("polyline")]
-            result["polyline"] = ";".join(polyline_points) if polyline_points else None
+            result["polyline"] = ";".join(polyline_points) if polyline_points else ""
         
         return result
         
@@ -259,6 +249,7 @@ def calculate_transit_route(
         cost = float(best_transit.get("cost", 0))
         walking_distance = int(best_transit.get("walking_distance", 0))
         
+        # 添加缺失的字段
         result = {
             "success": True,
             "duration": duration,
@@ -269,8 +260,25 @@ def calculate_transit_route(
             "destination": f"{end_lng},{end_lat}",
             "origin_name": "",
             "destination_name": "",
-            "route_type": "transit"
+            "route_type": "transit",
+            # 添加默认距离值（公交路线通常没有总距离）
+            "distance": 0,
+            # 添加polyline字段（即使为空）
+            "polyline": ""
         }
+        
+        # 尝试获取路线坐标（如果可用）
+        if "paths" in best_transit:
+            result["polyline"] = best_transit["paths"][0].get("polyline", "")
+        elif "segments" in best_transit:
+            polyline_points = []
+            for segment in best_transit["segments"]:
+                if "bus" in segment and segment["bus"].get("buslines"):
+                    busline = segment["bus"]["buslines"][0]
+                    polyline_points.append(busline.get("polyline", ""))
+                elif "walking" in segment:
+                    polyline_points.append(segment["walking"].get("polyline", ""))
+            result["polyline"] = ";".join(polyline_points)
         
         return result
         
@@ -280,40 +288,144 @@ def calculate_transit_route(
 def decode_polyline(polyline_str: str) -> List[List[float]]:
     """解码高德地图的polyline字符串为坐标点列表"""
     if not polyline_str:
+        print("空polyline字符串")
         return []
     
     points = []
     coordinate_chunks = polyline_str.split(';')
+    print(f"解码polyline: 分块数量={len(coordinate_chunks)}")
     
     for chunk in coordinate_chunks:
         if ',' in chunk:
-            lng, lat = chunk.split(',')
-            points.append([float(lat), float(lng)])  # Folium使用[纬度,经度]顺序
+            try:
+                # 高德地图返回的是"经度,纬度"格式
+                lng, lat = chunk.split(',')
+                # Folium使用[纬度,经度]顺序
+                points.append([float(lat), float(lng)])
+            except Exception as e:
+                print(f"解析坐标块 '{chunk}' 失败: {e}")
+    
+    print(f"解码后坐标点数量: {len(points)}")
+    if points:
+        print(f"第一个点: 纬度={points[0][0]}, 经度={points[0][1]}")
+        print(f"最后一个点: 纬度={points[-1][0]}, 经度={points[-1][1]}")
     
     return points
 
-def create_map_html(result: Dict, route_type: str) -> str:  # 添加route_type参数
+def create_map_html(result: Dict, route_type: str) -> str:
     """创建路线可视化地图并返回HTML字符串"""
-    # 原函数内容保持不变，根据route_type调整地图样式
-    if not result.get("success") or not result.get("polyline"):
-        return "<div style='color:red; padding:20px; text-align:center;'>无法生成路线地图</div>"
+    import math
     
-    # 解码路线坐标
-    points = decode_polyline(result["polyline"])
+    # 处理路线类型（兼容大小写）
+    route_type = route_type.lower()
+    
+    # 检查结果是否有效
+    if not result.get("success"):
+        error_msg = result.get("error", "未知错误")
+        print(f"无法生成路线地图: {error_msg}")
+        return f"<div style='color:red; padding:20px; text-align:center;'>无法生成路线地图: {error_msg}</div>"
+    
+    # 特殊处理公交路线 - 从多个路段中提取坐标点
+    points = []
+    if route_type == "transit" and "segments" in result:
+        print("处理公交路线...")
+        for segment in result.get("segments", []):
+            # 处理公交路段
+            if "bus" in segment and segment["bus"].get("buslines"):
+                busline = segment["bus"]["buslines"][0]
+                polyline = busline.get("polyline", "")
+                if polyline:
+                    bus_points = decode_polyline(polyline)
+                    print(f"公交路段坐标点: {len(bus_points)}个")
+                    points.extend(bus_points)
+            
+            # 处理步行路段 - 修复步行路线显示问题并添加方向指示
+            if "walking" in segment:
+                walking = segment["walking"]
+                polyline = walking.get("polyline", "")
+                if polyline:
+                    walk_points = decode_polyline(polyline)
+                    if walk_points and len(walk_points) >= 2:
+                        # 添加步行方向箭头（每5个点添加一个）
+                        for i in range(0, len(walk_points) - 1, 5):
+                            if i+1 < len(walk_points):
+                                start_point = walk_points[i]
+                                end_point = walk_points[i+1]
+                                
+                                # 计算角度
+                                angle = math.atan2(
+                                    end_point[0] - start_point[0],
+                                    end_point[1] - start_point[1]
+                                ) * 180 / math.pi
+                                
+                                # 添加方向标记
+                                folium.RegularPolygonMarker(
+                                    location=start_point,
+                                    number_of_sides=3,
+                                    radius=5,
+                                    rotation=angle,
+                                    color='#666666',
+                                    fill_color='#666666',
+                                    fill_opacity=0.7
+                                ).add_to(m)
+                        
+                        # 添加步行路线
+                        folium.PolyLine(
+                            locations=walk_points,
+                            color='#666666',
+                            weight=2,
+                            opacity=0.6,
+                            dashArray='5, 5',
+                            tooltip=f"🚶 步行路段 ({walking.get('distance', '未知')}米)"
+                        ).add_to(m)
+    
+    # 处理驾车路线
+    elif "polyline" in result and result["polyline"]:
+        print(f"处理{route_type}路线, polyline长度: {len(result['polyline'])}")
+        points = decode_polyline(result["polyline"])
+        print(f"解码后坐标点: {len(points)}个")
+    
+    # 如果没有坐标点，尝试从起点终点生成
     if not points:
-        return "<div style='color:red; padding:20px; text-align:center;'>路线坐标点为空</div>"
+        print("警告: 没有解析到路线坐标点")
+        if "origin" in result and "destination" in result:
+            try:
+                start_lng, start_lat = map(float, result["origin"].split(','))
+                end_lng, end_lat = map(float, result["destination"].split(','))
+                points = [[start_lat, start_lng], [end_lat, end_lng]]
+            except Exception as e:
+                print(f"解析起点终点失败: {e}")
+    
+    # 如果没有坐标点
+    if not points:
+        error_msg = "无法获取任何路线坐标点"
+        print(error_msg)
+        return f"<div style='color:red; padding:20px; text-align:center;'>{error_msg}</div>"
     
     # 计算地图中心点
-    center_lat = sum(point[0] for point in points) / len(points)
-    center_lng = sum(point[1] for point in points) / len(points)
+    try:
+        center_lat = sum(point[0] for point in points) / len(points)
+        center_lng = sum(point[1] for point in points) / len(points)
+        print(f"计算中心点: 纬度={center_lat}, 经度={center_lng}")
+    except:
+        center_lat, center_lng = points[0]
+        print(f"使用第一个点作为中心点: 纬度={center_lat}, 经度={center_lng}")
     
-    # 创建地图 - 设置合适的高度并添加边框
-    m = folium.Map(location=[center_lat, center_lng], 
-                   zoom_start=12,
-                   tiles='https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
-                   attr='高德地图',
-                   height=400,
-                   width='100%')
+    # 创建地图
+    try:
+        # 创建Figure对象确保地图有固定尺寸
+        fig = folium.Figure(width='100%', height='500px')
+        m = folium.Map(
+            location=[center_lat, center_lng], 
+            zoom_start=13 if len(points) > 2 else 10,
+            tiles='https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+            attr='高德地图'
+        )
+        fig.add_child(m)  # 将地图添加到Figure中
+        print("地图对象创建成功")
+    except Exception as e:
+        print(f"创建地图失败: {e}")
+        return f"<div style='color:red; padding:20px; text-align:center;'>创建地图失败: {str(e)}</div>"
     
     # 添加美化样式
     m.get_root().html.add_child(folium.Element("""
@@ -322,6 +434,7 @@ def create_map_html(result: Dict, route_type: str) -> str:  # 添加route_type�
                 border-radius: 15px;
                 box-shadow: 0 8px 25px rgba(0,0,0,0.15);
                 border: 2px solid #e0e0e0;
+                height: 500px !important;
             }
             .leaflet-control-container .leaflet-top.leaflet-right {
                 margin-top: 10px;
@@ -330,97 +443,150 @@ def create_map_html(result: Dict, route_type: str) -> str:  # 添加route_type�
         </style>
     """))
     
-    if route_type == "driving":
-        # 驾车路线处理
-        if result.get("polyline"):
-            points = decode_polyline(result["polyline"])
-            if points:
-                # 添加路线
-                folium.PolyLine(
-                    locations=points,
-                    color='#1890FF',
-                    weight=5,
-                    opacity=0.8,
-                    tooltip=f"🚗 驾车路线: {result['distance']/1000:.2f}公里, {result['duration']//60}分钟"
-                ).add_to(m)
-        
-        # 添加起点标记 - 汽车图标
-        folium.Marker(
-            location=[start_lat, start_lng],
-            popup=f"🚗 起点: {result.get('origin_name', '')}",
-            icon=folium.Icon(color="green", icon="car", prefix='fa'),
-            tooltip="起点"
-        ).add_to(m)
-        
-        # 添加终点标记
-        folium.Marker(
-            location=[end_lat, end_lng],
-            popup=f"🏁 终点: {result.get('destination_name', '')}",
-            icon=folium.Icon(color="red", icon="flag-checkered", prefix='fa'),
-            tooltip="终点"
-        ).add_to(m)
+    # 获取起点终点坐标
+    start_lat, start_lng = points[0]
+    end_lat, end_lng = points[-1]
     
-    elif route_type == "transit":
-        # 公交路线处理
-        segments = result.get("segments", [])
-        colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7']
-        
-        for i, segment in enumerate(segments):
-            color = colors[i % len(colors)]
+    # 起点终点名称
+    origin_name = result.get("origin_name", "起点")
+    dest_name = result.get("destination_name", "终点")
+    
+    # 根据路线类型处理
+    try:
+        if route_type == "driving":
+            print("添加驾车路线...")
+            # 添加路线
+            folium.PolyLine(
+                locations=points,
+                color='#1890FF',
+                weight=5,
+                opacity=0.8,
+                tooltip="🚗 驾车路线"
+            ).add_to(m)
             
-            if segment.get("bus") and segment["bus"].get("buslines"):
+            # 添加起点标记
+            folium.Marker(
+                location=[start_lat, start_lng],
+                popup=f"🚗 起点: {origin_name}",
+                icon=folium.Icon(color="green", icon="car", prefix='fa'),
+                tooltip="起点"
+            ).add_to(m)
+            
+            # 添加终点标记
+            folium.Marker(
+                location=[end_lat, end_lng],
+                popup=f"🏁 终点: {dest_name}",
+                icon=folium.Icon(color="red", icon="flag-checkered", prefix='fa'),
+                tooltip="终点"
+            ).add_to(m)
+            
+            print("驾车路线添加成功")
+        
+        elif route_type == "transit":
+            print("添加公交路线...")
+            # 处理公交/地铁路段
+            colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7']
+            segment_idx = 0
+            
+            for segment in result.get("segments", []):
+                color = colors[segment_idx % len(colors)]
+                segment_idx += 1
+                
                 # 公交/地铁线路
-                busline = segment["bus"]["buslines"][0]
-                polyline = busline.get("polyline", "")
-                if polyline:
-                    points = decode_polyline(polyline)
-                    if points:
-                        folium.PolyLine(
-                            locations=points,
-                            color=color,
-                            weight=4,
-                            opacity=0.7,
-                            tooltip=f"🚌 {busline.get('name', '公交线路')}"
-                        ).add_to(m)
-            
-            elif segment.get("walking"):
-                # 步行路段
-                steps = segment["walking"].get("steps", [])
-                for step in steps:
-                    polyline = step.get("polyline", "")
+                if "bus" in segment and segment["bus"].get("buslines"):
+                    busline = segment["bus"]["buslines"][0]
+                    polyline = busline.get("polyline", "")
                     if polyline:
-                        points = decode_polyline(polyline)
-                        if points:
+                        bus_points = decode_polyline(polyline)
+                        if bus_points:
                             folium.PolyLine(
-                                locations=points,
-                                color='#666666',
-                                weight=2,
-                                opacity=0.6,
-                                dashArray='5, 5',
-                                tooltip="🚶 步行路段"
+                                locations=bus_points,
+                                color=color,
+                                weight=4,
+                                opacity=0.7,
+                                tooltip=f"🚌 {busline.get('name', '公交线路')}"
                             ).add_to(m)
+            
+            # 添加起点标记
+            folium.Marker(
+                location=[start_lat, start_lng],
+                popup=f"🚌 起点: {origin_name}",
+                icon=folium.Icon(color="blue", icon="bus", prefix='fa'),
+                tooltip="起点"
+            ).add_to(m)
+            
+            # 添加终点标记
+            folium.Marker(
+                location=[end_lat, end_lng],
+                popup=f"🏁 终点: {dest_name}",
+                icon=folium.Icon(color="red", icon="flag-checkered", prefix='fa'),
+                tooltip="终点"
+            ).add_to(m)
+            
+            # 添加换乘点标记
+            if "segments" in result:
+                for i, segment in enumerate(result["segments"]):
+                    if i > 0:  # 跳过起点
+                        if "bus" in segment:
+                            busline = segment["bus"]["buslines"][0]
+                            departure_stop = busline.get("departure_stop", {})
+                            if departure_stop:
+                                try:
+                                    location_str = departure_stop.get("location")
+                                    if location_str:
+                                        lng, lat = location_str.split(",")
+                                        folium.Marker(
+                                            location=[float(lat), float(lng)],
+                                            popup=f"↔️ 换乘点: {departure_stop.get('name', '换乘站')}",
+                                            icon=folium.Icon(color="purple", icon="exchange", prefix='fa'),
+                                            tooltip="换乘点"
+                                        ).add_to(m)
+                                except Exception as e:
+                                    print(f"添加换乘点失败: {e}")
+            print("公交路线添加成功")
         
-        # 添加起点标记 - 公交图标
-        folium.Marker(
-            location=[start_lat, start_lng],
-            popup=f"🚌 起点: {result.get('origin_name', '')}",
-            icon=folium.Icon(color="blue", icon="bus", prefix='fa'),
-            tooltip="起点"
-        ).add_to(m)
+        # 添加小地图和全屏功能
+        MiniMap(position='bottomleft').add_to(m)
+        Fullscreen(position='topright').add_to(m)
+        print("小地图和全屏功能添加成功")
         
-        # 添加终点标记
-        folium.Marker(
-            location=[end_lat, end_lng],
-            popup=f"🏁 终点: {result.get('destination_name', '')}",
-            icon=folium.Icon(color="red", icon="flag-checkered", prefix='fa'),
-            tooltip="终点"
-        ).add_to(m)
+        # 添加JavaScript代码确保地图正确显示
+        m.get_root().html.add_child(folium.Element("""
+        <script>
+            // 延迟调整地图大小
+            setTimeout(() => {
+                if (window.L && window.L.Map) {
+                    // 获取所有地图实例并调整大小
+                    Object.values(L.Map._instances).forEach(map => {
+                        try {
+                            map.invalidateSize();
+                        } catch (e) {
+                            console.error("调整地图大小失败:", e);
+                        }
+                    });
+                }
+            }, 1000);
+        </script>
+        """))
+        
+        print("地图HTML生成成功")
+        return m.get_root().render()
     
-    # 添加小地图和全屏功能
-    MiniMap(position='bottomleft').add_to(m)
-    Fullscreen(position='topright').add_to(m)
-    
-    return m._repr_html_()
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        error_html = f"""
+        <div style="color:red; padding:20px; text-align:center;">
+            <h3>地图渲染错误</h3>
+            <p>{str(e)}</p>
+            <p>起点: {origin_name} ({start_lat}, {start_lng})</p>
+            <p>终点: {dest_name} ({end_lat}, {end_lng})</p>
+            <p>坐标点数量: {len(points)}</p>
+            <pre>{error_trace}</pre>
+        </div>
+        """
+        return error_html
+
 def save_map_as_image(result: Dict, route_type: str = "driving") -> str:
     """将地图保存为JPG图片并返回base64编码"""
     try:
@@ -480,30 +646,74 @@ def save_map_as_image(result: Dict, route_type: str = "driving") -> str:
     except Exception as e:
         print(f"地图截图失败: {e}")
         # 返回一个占位图片的base64编码
-        return "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCdABmX/9k="
+        return "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCdABmX/9k="
 
+# ... (前面的代码保持不变) ...
 
+# ✅ 这是确认过的：amap.process_route() 实际中已正确调用 create_map_html()
 def process_route(start: str, end: str, route_type: str):
+    """处理路线规划请求并生成地图和路线信息"""
+    from .amap import create_map_html  # ✅ 确保明确调用
+
     # 地理编码获取坐标
     start_coords = geocode_location(start)
     end_coords = geocode_location(end)
-    
+
     if not start_coords or not end_coords:
         return "地址解析失败", "", ""
 
-    # 根据路线类型调用不同计算函数
+    # 调用路线计算
     if route_type == "驾车":
         result = calculate_driving_route(*start_coords, *end_coords)
     elif route_type == "公交":
         result = calculate_transit_route(*start_coords, *end_coords)
+    elif route_type == "步行":
+        result = calculate_walking_route(*start_coords, *end_coords)
     else:
-        result = {"success": False, "error": "暂不支持此路线类型"}
+        return "暂不支持该路线类型", "", ""
 
-    # 处理结果
-    if result.get('success'):
-        summary = f"路线距离：{result['distance']/1000:.1f}公里\n预计时间：{result['duration']//60}分钟"
-        map_html = create_map_html(result, route_type.lower())
-        steps = '\n'.join([step['instruction'] for step in result.get('steps',[])])
-        return summary, map_html, steps
+    result["origin_name"] = start
+    result["destination_name"] = end
+
+    if not result.get("success"):
+        return result.get("error", "路线规划失败"), "", ""
+
+    # ✅ 正确调用 create_map_html，生成 folium 的 HTML 字符串
+    map_html = create_map_html(result, route_type.lower())
+
+    # 路线摘要
+    duration = result.get("duration", 0) // 60
+    distance = result.get("distance", 0)
+    if route_type == "公交":
+        summary = f"公交路线：步行{result.get('walking_distance', 0)}米，总耗时{duration}分钟"
+    elif route_type == "驾车":
+        summary = f"驾车路线：{distance / 1000:.1f}公里，预计{duration}分钟"
+    elif route_type == "步行":
+        summary = f"步行路线：{distance}米，预计{duration}分钟"
     else:
-        return result.get('error', '路线规划失败'), "", ""
+        summary = "路线信息"
+
+    # 路线步骤
+    steps = []
+    try:
+        if route_type == "驾车" and "steps" in result:
+            for step in result["steps"]:
+                steps.append(step.get("instruction", ""))
+        elif route_type == "公交" and "segments" in result:
+            for segment in result["segments"]:
+                if "walking" in segment:
+                    for walk_step in segment["walking"].get("steps", []):
+                        steps.append("🚶 " + walk_step.get("instruction", ""))
+                if "bus" in segment and segment["bus"].get("buslines"):
+                    bus = segment["bus"]["buslines"][0]
+                    departure = bus.get("departure_stop", {}).get("name", "?")
+                    arrival = bus.get("arrival_stop", {}).get("name", "?")
+                    steps.append(f"🚌 乘坐{bus.get('name', '')}（{departure} → {arrival}）")
+        elif route_type == "步行" and "steps" in result:
+            for step in result["steps"]:
+                steps.append("🚶 " + step.get("instruction", ""))
+    except Exception as e:
+        print("步骤解析失败：", e)
+        steps.append("⚠️ 路线详情加载失败")
+
+    return summary, map_html, "\n".join(steps)
