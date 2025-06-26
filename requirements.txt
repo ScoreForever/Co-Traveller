@@ -1,0 +1,28 @@
+﻿# 如果您的设备有GPU，请单独安装适合GPU的torch版本，详见 https://pytorch.org/get-started/locally/
+# 当前requirements.txt默认未自动安装torch
+# -- 如需CPU或GPU支持，请根据需求手动安装torch --
+
+markdown
+pdfkit
+python-dotenv
+gradio>=3.41.0
+numpy
+pillow
+pydub
+pandas
+flask
+plotly
+langchain
+langchain-community
+langchain-huggingface
+faiss-cpu
+pymupdf
+sseclient
+huggingface-hub
+# torch  # 需要安装torch请手动操作，支持CPU或GPU版本
+transformers
+sentence-transformers
+folium
+selenium
+html2image
+requests

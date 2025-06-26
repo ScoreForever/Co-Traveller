@@ -178,4 +178,13 @@ cython_debug/
 *.tmp
 *.log
 
+# API环境配置文件
 API.env
+
+# 忽略数据库
+/database/
+/dataset/
+
+# 忽略模型文件
+/models/
+/src/models/
