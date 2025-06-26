@@ -24,7 +24,5 @@ transformers
 sentence-transformers
 folium
 selenium
-time
 html2image
 requests
-math
