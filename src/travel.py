@@ -781,13 +781,12 @@ with gr.Blocks(css=css) as demo:
             outputs=[chat_state, chatbot]
         )
     # 新增：路线规划标签页
-    
-with gr.Tab("🗺️ 路线规划"):
-    gr.Markdown("# 🗺️ 高德地图路线规划")
-    gr.Markdown("输入起点和终点的位置名称（如：北京天安门、上海东方明珠），自动计算最佳路线")
-    
-    with gr.Row():
-        with gr.Column(scale=1):
+    with gr.Tab("🗺️ 路线规划"):
+        gr.Markdown("# 🗺️ 高德地图路线规划")
+        gr.Markdown("输入起点和终点的位置名称（如：北京天安门、上海东方明珠），自动计算最佳路线")
+        
+        with gr.Row():
+            with gr.Column(scale=1):
                 with gr.Group():
                     gr.Markdown("### 📍 起点位置")
                     start_location = gr.Textbox(
@@ -806,63 +805,62 @@ with gr.Tab("🗺️ 路线规划"):
                 
                 submit_btn = gr.Button("🚗 规划路线", variant="primary")
                 
-                # 路线类型选择（移除了步行选项）
+                # 路线类型选择
                 route_type = gr.Dropdown(
                     label="路线类型",
-                    choices=["驾车", "公交"],  # 移除了步行选项
+                    choices=["驾车", "公交"],
                     value="驾车"
                 )
                 
-                # 更新示例（移除了步行示例）
+                # 示例
                 gr.Examples(
                     examples=[
                         ["北京天安门", "北京颐和园", "驾车"],
-                        ["上海豫园", "上海东方明珠", "公交"]
+                        ["上海外滩", "上海东方明珠", "公交"]
                     ],
                     inputs=[start_location, end_location, route_type],
                     label="示例路线"
                 )
-
-        
-        with gr.Column(scale=2):
-            # 路线摘要
-            with gr.Group():
-                gr.Markdown("### 📊 路线摘要")
-                summary = gr.Textbox(label="路线信息", lines=4, interactive=False)
             
-            # 路线地图 - 独立的Group
-            with gr.Group():
-                gr.Markdown("### 🗺️ 路线地图")
-                # 修复地图容器
-                map_display = gr.HTML(
-                    label="路线可视化",
-                    elem_id="map-container",  # 添加ID以便CSS定位
-                    value="""
-                    <div style="
-                        height: 500px;
-                        background: #f8f9fa;
-                        border-radius: 15px;
-                        padding: 20px;
-                        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-                    ">
-                        <div style="height: 100%; width: 100%; display: flex; align-items: center; justify-content: center;">
-                            <p>等待路线规划...</p>
+            with gr.Column(scale=2):
+                # 路线摘要
+                with gr.Group():
+                    gr.Markdown("### 📊 路线摘要")
+                    summary = gr.Textbox(label="路线信息", lines=4, interactive=False)
+                
+                # 路线地图 - 关键修复
+                with gr.Group():
+                    gr.Markdown("### 🗺️ 路线地图")
+                    map_display = gr.HTML(
+                        label="路线可视化",
+                        elem_id="map-container",
+                        value="""
+                        <div style="
+                            height: 500px;
+                            background: #f8f9fa;
+                            border-radius: 15px;
+                            padding: 20px;
+                            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                        ">
+                            <div style="height: 100%; width: 100%; display: flex; align-items: center; justify-content: center;">
+                                <p>等待路线规划...</p>
+                            </div>
                         </div>
-                    </div>
-                    """
-                )
-            
-            # 详细路线指引 - 独立的Group
-            with gr.Group():
-                gr.Markdown("### 🚥 详细路线指引")
-                step_instructions = gr.Textbox(label="导航步骤", lines=8, interactive=False)
-    
-    # 事件处理
-    submit_btn.click(
-        fn=process_route,
-        inputs=[start_location, end_location, route_type],
-        outputs=[summary, map_display, step_instructions]
-    )
+                        """
+                    )
+                
+                # 详细路线指引
+                with gr.Group():
+                    gr.Markdown("### 🚥 详细路线指引")
+                    step_instructions = gr.Textbox(label="导航步骤", lines=8, interactive=False)
+        
+        # 事件处理
+        submit_btn.click(
+            fn=process_route,
+            inputs=[start_location, end_location, route_type],
+            outputs=[summary, map_display, step_instructions]
+        )
+
 
     # 天气查询Tab
     with gr.Tab("🌦️ 地点天气查询"):
