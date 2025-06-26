@@ -23,3 +23,9 @@ huggingface-hub
 transformers
 sentence-transformers
 folium
+selenium
+tempfile
+time
+html2image
+requests
+math
