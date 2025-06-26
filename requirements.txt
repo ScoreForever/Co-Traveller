@@ -23,3 +23,6 @@ huggingface-hub
 transformers
 sentence-transformers
 folium
+selenium
+html2image
+requests
