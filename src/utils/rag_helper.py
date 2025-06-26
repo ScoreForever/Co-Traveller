@@ -113,10 +113,23 @@ def build_retriever_from_docs(documents):
     if not chunks:
         raise ValueError("文档内容为空，无法构建向量数据库")
 
+    # embedder = HuggingFaceEmbeddings(
+    #     model_name="./models/bge-small-zh",
+    #     model_kwargs={"device": "cpu"}
+    # )
+
+    # 以当前 travel.py 所在的 src 目录为基准
+    src_dir = Path(__file__).resolve().parent.parent
+    model_path = src_dir / "models" / "bge-small-zh"
+
+    # 使用绝对路径初始化嵌入模型
     embedder = HuggingFaceEmbeddings(
-        model_name="./models/bge-small-zh",
+        model_name=str(model_path),
         model_kwargs={"device": "cpu"}
     )
+    
+
+
     vectordb = FAISS.from_documents(chunks, embedder)
     return vectordb.as_retriever(search_kwargs={"k": 10})
 
@@ -161,9 +174,25 @@ if __name__ == "__main__":
     os.environ.update(env_vars)
 
     dataset_dir = Path(__file__).resolve().parent.parent / "dataset"
+    #dataset_dir = Path("./dataset").resolve()
+    #dataset_dir = Path("dataset").resolve()
     rag_docs = load_pdfs_from_folder(dataset_dir)
     if not rag_docs:
         raise RuntimeError("PDF 文件夹中未成功加载任何文档，请检查 dataset 路径与 PDF 内容")
+    retriever = build_retriever_from_docs(rag_docs)
+
+    # dataset_dir = Path(__file__).resolve().parent.parent / "dataset"
+    # # 打印调试信息，方便排查问题
+    # print(f"📂 正在加载 dataset 文件夹路径: {dataset_dir}")
+    # if not dataset_dir.exists():
+    #     raise FileNotFoundError(f"找不到 dataset 文件夹，请确认路径是否存在: {dataset_dir}")
+
+    # 加载 PDF 文档
+    rag_docs = load_pdfs_from_folder(dataset_dir)
+    if not rag_docs:
+        raise RuntimeError("❌ PDF 文件夹中未成功加载任何文档，请检查 dataset 路径与 PDF 内容")
+
+    # 构建检索器
     retriever = build_retriever_from_docs(rag_docs)
 
     with gr.Blocks() as demo:
