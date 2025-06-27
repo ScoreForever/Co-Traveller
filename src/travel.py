@@ -437,7 +437,6 @@ def generate_travel_plan_multi_v2(place1, date1, dests, date2):
         return ticket_link, travel_plan_data, map_html
     except Exception as e:
         return f"发生错误: {str(e)}", "无法生成旅行规划"
-# 带本地缓存的城市列表获取（24小时更新）
 
 def generate_city_map(place, date=None):
     """使用高德静态地图API生成城市或景点地图"""
@@ -744,73 +743,84 @@ class VoiceAssistantState:
 
 assistant_state = VoiceAssistantState()
 
-def list_saved_plans():
-    """列出所有保存的旅行计划"""
-    save_dir = Path("../temp/travel_plans")
-    save_dir.mkdir(parents=True, exist_ok=True)
-    plans = []
-    for file in save_dir.glob("*.json"):
-        try:
-            with open(file, "r", encoding="utf-8") as f:
-                plan = json.load(f)
-                plans.append({
-                    "filename": file.name,
-                    "place1": plan["place1"],
-                    "place2": plan["place2"],
-                    "date1": plan["date1"],
-                    "date2": plan["date2"],
-                    "saved_at": plan["saved_at"],
-                    "short_summary": plan.get("short_summary", "无行程信息")
-                })
-        except:
-            continue
-    plans.sort(key=lambda x: x["saved_at"], reverse=True)
-    return plans
+from pathlib import Path
+module_path = Path(__file__).parent / "utils"  
+sys.path.append(str(module_path))
+from railway import query_trains
+from airplane import query_flights
 
-def load_travel_plan(filename):
-    """加载保存的旅行计划"""
-    save_dir = Path("../temp/travel_plans")
-    file_path = save_dir / filename
-    if not file_path.exists():
-        return None, None, None, None, None, None, "未找到指定的旅行计划"
+
+def query_airplane(start, end, date):
+    """查询机票信息"""
+    if not start or not end or not date:
+        return "请输入出发地、目的地和日期"
+    
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            plan = json.load(f)
-        travel_plan_data = plan["travel_plan_data"]
-        if isinstance(travel_plan_data, list) and len(travel_plan_data) > 0:
-            travel_plan_data = pd.DataFrame(travel_plan_data)
-        return (
-            plan["place1"], 
-            plan["date1"], 
-            plan["place2"], 
-            plan["date2"], 
-            plan["ticket_link"], 
-            travel_plan_data,
-            "行程已加载"
-        )
+        flights = query_flights(leave_city=start, arrive_city=end, date=date)
+        if not flights:
+            return "未查询到符合条件的航班。"
+        
+        result = []
+        for flight in flights:
+            info = (f"{flight.get('flightNo','')} {flight.get('airlineCompany','')} "
+                    f"{flight.get('planLeaveTime','')}→{flight.get('planArriveTime','')} "
+                    f"{flight.get('leavePort','')}({flight.get('leavePortCode','')})→"
+                    f"{flight.get('arrivePort','')}({flight.get('arrivePortCode','')}) "
+                    f"状态:{flight.get('state','')}")
+            result.append(info)
+        
+        return "\n\n".join(result)
+    
     except Exception as e:
-        return None, None, None, None, None, None, f"加载失败: {str(e)}"
+        return f"查询航班失败: {str(e)}"
 
-def delete_travel_plan(filename):
-    """删除保存的旅行计划"""
-    save_dir = Path("../temp/travel_plans")
-    file_path = save_dir / filename
-    if not file_path.exists():
-        return "未找到指定的旅行计划", list_saved_plans()
+
+def query_train(start, end, date):
+    """查询火车票信息"""
+    if not start or not end or not date:
+        return "请输入出发地、目的地和日期"
+    
     try:
-        file_path.unlink()
-        return "旅行计划已删除", list_saved_plans()
+        trains = query_trains(start, end, date=date)
+        if not trains:
+            return "未查询到符合条件的火车班次。"
+        
+        result = []
+        for train in trains:
+            price_info = []
+            price_fields = [
+                ("pricesw", "商务座"),
+                ("pricetd", "特等座"),
+                ("pricegr1", "高级软卧上铺"),
+                ("pricegr2", "高级软卧下铺"),
+                ("pricerw1", "软卧上铺"),
+                ("pricerw2", "软卧下铺"),
+                ("priceyw1", "硬卧上铺"),
+                ("priceyw2", "硬卧中铺"),
+                ("priceyw3", "硬卧下铺"),
+                ("priceyd", "一等座"),
+                ("priceed", "二等座"),
+            ]
+            
+            for key, label in price_fields:
+                value = train.get(key, "")
+                value_str = str(value).strip()
+                if value_str and value_str != "0.0" and value_str != "-":
+                    price_info.append(f"{label}:{value_str}元")
+            
+            price_str = " ".join(price_info)
+            info = (f"{train.get('trainno','')} {train.get('type','')} "
+                    f"{train.get('departuretime','')}→{train.get('arrivaltime','')} "
+                    f"历时{train.get('costtime','')} {price_str}")
+            result.append(info)
+        
+        return "\n\n".join(result)
+    
     except Exception as e:
-        return f"删除失败: {str(e)}", list_saved_plans()
+        return f"查询火车班次失败: {str(e)}"
 
-# 创建界面
-css = """
-#map-container {
-    height: 500px !important;
-    min-height: 500px;
-}
-"""
-with gr.Blocks(css=css) as demo:
+#创建界面
+with gr.Blocks() as demo:
     gr.Markdown("# 🧳 旅行助手")
     
     # 查票与行程规划Tab
@@ -982,12 +992,20 @@ with gr.Blocks(css=css) as demo:
         )
         
         save_btn.click(
-            fn=lambda p1, d1, *args: save_travel_plan( # type: ignore
-                p1, d1, args[0] if args[0] else "", args[-2] if len(args) > 1 else "", args[-3], args[-4], args[-1]
-            ),
-            inputs=[place1, date1] + dest_inputs + [date2, ticket_url_output, travel_plan_output, filename_input],
-            outputs=[save_status]
-        )
+    fn=lambda p1, d1, *dest_args, d2, ticket_link, plan_data, filename: save_travel_plan(
+        p1, d1, collect_destinations(*dest_args), d2, ticket_link, plan_data, filename
+    ),
+    inputs=[
+        place1, 
+        date1, 
+        *dest_inputs,  # 所有目的地输入框
+        date2, 
+        ticket_url_output, 
+        travel_plan_output, 
+        filename_input
+    ],
+    outputs=[save_status]
+)
 
     with gr.Tab("🗣️ 语音助手"):    
         gr.Markdown("### 🎤 语音对话助手")
@@ -1156,6 +1174,7 @@ with gr.Blocks(css=css) as demo:
         )
     
     # 新增：路线规划标签页
+    
     with gr.Tab("🗺️ 路线规划"):
         gr.Markdown("# 🗺️ 高德地图路线规划")
         gr.Markdown("输入起点和终点的位置名称（如：北京天安门、上海东方明珠），自动计算最佳路线")
@@ -1186,7 +1205,7 @@ with gr.Blocks(css=css) as demo:
                     choices=["驾车", "公交"],
                     value="驾车"
                 )
-                
+
                 # 示例
                 gr.Examples(
                     examples=[
@@ -1234,224 +1253,6 @@ with gr.Blocks(css=css) as demo:
             fn=process_route,
             inputs=[start_location, end_location, route_type],
             outputs=[summary, map_display, step_instructions]
-        )
-    # 票务查询Tab
-    with gr.Tab("🎫 票务查询"):
-        gr.Markdown("### 查询火车票和机票信息")
-        
-        with gr.Row():
-            with gr.Column():
-                departure_place = gr.Textbox(label="出发地", placeholder="例如：北京")
-                arrival_place = gr.Textbox(label="目的地", placeholder="例如：上海")
-                departure_date = gr.Textbox(label="出发日期", placeholder="YYYY-MM-DD")
-                return_date = gr.Textbox(label="返回日期（可选）", placeholder="YYYY-MM-DD")
-                
-                ticket_type = gr.Radio(
-                    choices=["单程", "往返"],
-                    label="票务类型",
-                    value="单程"
-                )
-                
-                transport_type = gr.Radio(
-                    choices=["火车", "飞机"],
-                    label="交通工具",
-                    value="火车"
-                )
-                
-                search_btn = gr.Button("🔍 查询票务", variant="primary")
-                clear_btn = gr.Button("清除")
-            
-            with gr.Column():
-                gr.Markdown("### 票务查询结果")
-                
-                # 火车票表格
-                with gr.Tab("火车票"):
-                    train_tickets_output = gr.Dataframe(
-                        headers=["车次", "出发站", "到达站", "出发时间", "到达时间", "历时", "商务座", "一等座", "二等座", "硬座", "硬卧", "软卧"],
-                        label="火车票信息",
-                        interactive=False
-                    )
-                    
-                    train_price_plot = gr.Plot(label="票价趋势图")
-                
-                # 机票表格
-                with gr.Tab("机票"):
-                    flight_tickets_output = gr.Dataframe(
-                        headers=["航空公司", "航班号", "出发机场", "到达机场", "出发时间", "到达时间", "历时", "价格", "舱位"],
-                        label="机票信息",
-                        interactive=False
-                    )
-                    
-                    flight_price_plot = gr.Plot(label="票价趋势图")
-        
-        # 票务查询函数
-        def search_tickets(departure_place, arrival_place, departure_date, return_date, ticket_type, transport_type):
-            """模拟查询火车票和机票信息"""
-            if not departure_place or not arrival_place or not departure_date:
-                if transport_type == "火车":
-                    return pd.DataFrame(columns=["车次", "出发站", "到达站", "出发时间", "到达时间", "历时", "商务座", "一等座", "二等座", "硬座", "硬卧", "软卧"]), None
-                else:
-                    return pd.DataFrame(columns=["航空公司", "航班号", "出发机场", "到达机场", "出发时间", "到达时间", "历时", "价格", "舱位"]), None
-            
-            # 验证日期格式
-            if not is_valid_date(departure_date):
-                if transport_type == "火车":
-                    return pd.DataFrame(columns=["车次", "出发站", "到达站", "出发时间", "到达时间", "历时", "商务座", "一等座", "二等座", "硬座", "硬卧", "软卧"]), None
-                else:
-                    return pd.DataFrame(columns=["航空公司", "航班号", "出发机场", "到达机场", "出发时间", "到达时间", "历时", "价格", "舱位"]), None
-            
-            # 验证返程日期
-            if ticket_type == "往返" and return_date and not is_valid_date(return_date):
-                if transport_type == "火车":
-                    return pd.DataFrame(columns=["车次", "出发站", "到达站", "出发时间", "到达时间", "历时", "商务座", "一等座", "二等座", "硬座", "硬卧", "软卧"]), None
-                else:
-                    return pd.DataFrame(columns=["航空公司", "航班号", "出发机场", "到达机场", "出发时间", "到达时间", "历时", "价格", "舱位"]), None
-            
-            # 模拟生成票务数据
-            if transport_type == "火车":
-                # 模拟火车票数据
-                train_data = []
-                for i in range(1, 11):
-                    # 随机生成车次
-                    train_number = f"G{i:03d}" if random.random() > 0.5 else f"D{i:03d}"
-                    
-                    # 随机生成时间
-                    dep_hour = random.randint(6, 22)
-                    dep_minute = random.choice([0, 15, 30, 45])
-                    departure_time = f"{dep_hour:02d}:{dep_minute:02d}"
-                    
-                    # 随机生成历时
-                    duration_hours = random.randint(1, 10)
-                    duration_minutes = random.choice([0, 15, 30, 45])
-                    duration = f"{duration_hours}小时{duration_minutes}分钟"
-                    
-                    # 计算到达时间
-                    dep_datetime = datetime.strptime(f"{departure_date} {departure_time}", "%Y-%m-%d %H:%M")
-                    arr_datetime = dep_datetime + timedelta(hours=duration_hours, minutes=duration_minutes)
-                    arrival_time = arr_datetime.strftime("%H:%M")
-                    
-                    # 随机生成票价
-                    business_price = round(random.uniform(800, 2000), 2) if random.random() > 0.3 else ""
-                    first_price = round(random.uniform(500, 1200), 2) if random.random() > 0.3 else ""
-                    second_price = round(random.uniform(300, 800), 2) if random.random() > 0.1 else ""
-                    hard_seat = round(random.uniform(100, 300), 2) if train_number.startswith("D") and random.random() > 0.5 else ""
-                    hard_sleep = round(random.uniform(200, 500), 2) if train_number.startswith("D") and random.random() > 0.5 else ""
-                    soft_sleep = round(random.uniform(400, 800), 2) if train_number.startswith("D") and random.random() > 0.7 else ""
-                    
-                    train_data.append([
-                        train_number, 
-                        departure_place, 
-                        arrival_place, 
-                        departure_time, 
-                        arrival_time, 
-                        duration, 
-                        business_price, 
-                        first_price, 
-                        second_price, 
-                        hard_seat, 
-                        hard_sleep, 
-                        soft_sleep
-                    ])
-                
-                # 创建DataFrame
-                train_df = pd.DataFrame(
-                    train_data, 
-                    columns=["车次", "出发站", "到达站", "出发时间", "到达时间", "历时", "商务座", "一等座", "二等座", "硬座", "硬卧", "软卧"]
-                )
-                
-                # 创建票价趋势图
-                days = [datetime.strptime(departure_date, "%Y-%m-%d") + timedelta(days=i) for i in range(-3, 4)]
-                dates = [day.strftime("%Y-%m-%d") for day in days]
-                prices = [round(random.uniform(300, 800), 2) for _ in range(7)]
-                
-                fig = go.Figure(data=go.Scatter(x=dates, y=prices, mode='lines+markers'))
-                fig.update_layout(
-                    title=f"{departure_place}到{arrival_place}二等座票价趋势",
-                    xaxis_title="日期",
-                    yaxis_title="价格(元)"
-                )
-                
-                return train_df, fig
-            
-            else:
-                # 模拟机票数据
-                airlines = ["中国国航", "东方航空", "南方航空", "海南航空", "厦门航空", "深圳航空", "四川航空", "吉祥航空", "春秋航空"]
-                flight_data = []
-                
-                for i in range(1, 11):
-                    # 随机生成航空公司和航班号
-                    airline = random.choice(airlines)
-                    flight_number = f"{airline[:2]}{random.randint(1000, 9999)}"
-                    
-                    # 随机生成机场
-                    departure_airport = f"{departure_place}机场"
-                    arrival_airport = f"{arrival_place}机场"
-                    
-                    # 随机生成时间
-                    dep_hour = random.randint(6, 22)
-                    dep_minute = random.choice([0, 15, 30, 45])
-                    departure_time = f"{dep_hour:02d}:{dep_minute:02d}"
-                    
-                    # 随机生成历时
-                    duration_hours = random.randint(1, 5)
-                    duration_minutes = random.choice([0, 15, 30, 45])
-                    duration = f"{duration_hours}小时{duration_minutes}分钟"
-                    
-                    # 计算到达时间
-                    dep_datetime = datetime.strptime(f"{departure_date} {departure_time}", "%Y-%m-%d %H:%M")
-                    arr_datetime = dep_datetime + timedelta(hours=duration_hours, minutes=duration_minutes)
-                    arrival_time = arr_datetime.strftime("%H:%M")
-                    
-                    # 随机生成票价和舱位
-                    price = round(random.uniform(500, 3000), 2)
-                    cabin = random.choice(["经济舱", "超级经济舱", "商务舱", "头等舱"])
-                    
-                    flight_data.append([
-                        airline, 
-                        flight_number, 
-                        departure_airport, 
-                        arrival_airport, 
-                        departure_time, 
-                        arrival_time, 
-                        duration, 
-                        price, 
-                        cabin
-                    ])
-                
-                # 创建DataFrame
-                flight_df = pd.DataFrame(
-                    flight_data, 
-                    columns=["航空公司", "航班号", "出发机场", "到达机场", "出发时间", "到达时间", "历时", "价格", "舱位"]
-                )
-                
-                # 创建票价趋势图
-                days = [datetime.strptime(departure_date, "%Y-%m-%d") + timedelta(days=i) for i in range(-3, 4)]
-                dates = [day.strftime("%Y-%m-%d") for day in days]
-                prices = [round(random.uniform(500, 3000), 2) for _ in range(7)]
-                
-                fig = go.Figure(data=go.Scatter(x=dates, y=prices, mode='lines+markers'))
-                fig.update_layout(
-                    title=f"{departure_place}到{arrival_place}经济舱票价趋势",
-                    xaxis_title="日期",
-                    yaxis_title="价格(元)"
-                )
-                
-                return flight_df, fig
-        # 设置按钮事件
-        search_btn.click(
-            fn=lambda dp, ap, dd, rd, tt, tp: search_tickets(dp, ap, dd, rd, tt, tp),
-            inputs=[departure_place, arrival_place, departure_date, return_date, ticket_type, transport_type],
-            outputs=[train_tickets_output if transport_type == "火车" else flight_tickets_output, 
-                    train_price_plot if transport_type == "火车" else flight_price_plot]
-        )
-        
-        clear_btn.click(
-            fn=lambda: [None, None, None, None, "单程", "火车", 
-                    pd.DataFrame(columns=["车次", "出发站", "到达站", "出发时间", "到达时间", "历时", "商务座", "一等座", "二等座", "硬座", "硬卧", "软卧"]), None,
-                    pd.DataFrame(columns=["航空公司", "航班号", "出发机场", "到达机场", "出发时间", "到达时间", "历时", "价格", "舱位"]), None],
-            inputs=[],
-            outputs=[departure_place, arrival_place, departure_date, return_date, ticket_type, transport_type,
-                    train_tickets_output, train_price_plot, flight_tickets_output, flight_price_plot]
         )
     # 天气查询Tab
     with gr.Tab("🌦️ 地点天气查询"):
@@ -1616,58 +1417,7 @@ with gr.Blocks(css=css) as demo:
             inputs=[],
             outputs=[icon_html_output, weather_output, indices_output, map_image_output, map_caption_output]
         )
-    #行程历史管理Tab
-    with gr.Tab("行程历史管理"):
-        gr.Markdown("### 已保存的旅行计划")
-        
-        with gr.Row():
-            history_table = gr.Dataframe(
-                headers=["文件名", "出发地", "目的地", "出发日期", "返回日期", "保存时间", "摘要"],
-                label="历史行程",
-                interactive=False
-            )
-        
-        with gr.Row():
-            with gr.Column(scale=1):
-                file_selector = gr.Dropdown(choices=[], value=None, label="选择行程", allow_custom_value=True)
-                load_btn = gr.Button("加载行程")
-                delete_btn = gr.Button("删除行程")
-            with gr.Column(scale=2):
-                status_msg = gr.Textbox(label="操作状态", interactive=False)
-        
-        # 更新历史表格和文件选择器
-        def update_history_table():
-            plans = list_saved_plans()
-            if not plans:
-                return pd.DataFrame(columns=["文件名", "出发地", "目的地", "出发日期", "返回日期", "保存时间", "摘要"]), []
-            df = pd.DataFrame(plans)
-            return df, df["filename"].tolist()
-        
-        # 初始化时加载历史行程
-        demo.load(
-            fn=update_history_table,
-            outputs=[history_table, file_selector]
-        )
-        
-        # 加载行程
-        load_btn.click(
-            fn=lambda filename: load_travel_plan(filename) if filename else (None, None, None, None, None, None, "请先选择一个计划"),
-            inputs=[file_selector],
-            outputs=[place1, date1, dest_inputs[0], date2, ticket_url_output, travel_plan_output, status_msg]
-        ).then(
-            fn=update_history_table,
-            outputs=[history_table, file_selector]
-        )
-        
-        # 删除行程
-        delete_btn.click(
-            fn=lambda filename: delete_travel_plan(filename) if filename else ("请先选择一个计划", []),
-            inputs=[file_selector],
-            outputs=[status_msg, history_table]
-        ).then(
-            fn=update_history_table,
-            outputs=[file_selector]
-        )
+
     def load_env(filepath):
         env = {}
         if os.path.exists(filepath):
@@ -1685,7 +1435,7 @@ with gr.Blocks(css=css) as demo:
     env_vars = load_env(env_path)
     os.environ.update(env_vars)
 
-    #✅ 2. 加载 PDF 并构建检索系统（初始化一次即可）
+    # ✅ 2. 加载 PDF 并构建检索系统（初始化一次即可）
     try:
         dataset_dir = Path(__file__).resolve().parent.parent / "dataset"
         rag_docs = load_pdfs_from_folder(dataset_dir)
@@ -1701,7 +1451,6 @@ with gr.Blocks(css=css) as demo:
         pass  # 注释或跳过文档加载逻辑
     except Exception as e:
         print(f"文档检索功能已跳过：{e}")
-    
 
     # ✅ 3. RAG 问答界面
     with gr.Tab("📚 文档问答助手"):
@@ -1754,6 +1503,34 @@ with gr.Blocks(css=css) as demo:
 
         ---
         """
+        )
+    #交通票务查询Tab
+    with gr.Tab("交通票务查询") :
+        gr.Markdown("## 火车票和机票查询系统")
+        
+        with gr.Row():
+            with gr.Column(scale=1):
+                start_input = gr.Textbox(label="出发地", placeholder="请输入城市名称")
+                end_input = gr.Textbox(label="目的地", placeholder="请输入城市名称")
+                date_input = gr.Textbox(label="日期", placeholder="YYYY-MM-DD")
+                
+                with gr.Row():
+                    airplane_btn = gr.Button("查询机票", variant="primary")
+                    train_btn = gr.Button("查询火车票", variant="secondary")
+            
+            with gr.Column(scale=2):
+                result_output = gr.Textbox(label="查询结果", lines=15)
+        
+        airplane_btn.click(
+            fn=query_airplane,
+            inputs=[start_input, end_input, date_input],
+            outputs=result_output
+        )
+        
+        train_btn.click(
+            fn=query_train,
+            inputs=[start_input, end_input, date_input],
+            outputs=result_output
         )
 
 if __name__ == "__main__":
