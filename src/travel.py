@@ -603,7 +603,7 @@ def save_travel_plan(filename):
         return f"已保存为 {pdf_path.name}"
 
 #创建界面
-with gr.Blocks() as demo:
+with gr.Blocks(title="Co-Traveller") as demo:
     gr.Markdown("# 🧳 旅行助手")
     
     # 查票与行程规划Tab
