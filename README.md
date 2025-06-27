@@ -60,7 +60,8 @@ Co-Traveller 采用模块化设计，前端基于 Gradio 实现多标签页交�
   pip install -r requirements.txt
   ```
 - 需安装 [ffmpeg](https://ffmpeg.org/)（用于音频处理），并配置到环境变量。
-- 推荐安装 [wkhtmltopdf](https://wkhtmltopdf.org/downloads.html) 或 Pandoc（用于 Markdown/PDF 文档生成）。
+- **需手动安装 [wkhtmltopdf](https://wkhtmltopdf.org/downloads.html)（用于 Markdown/PDF 文档生成），并将其文件夹放置于 `scripts/` 或常见路径下。由于该文件较大，未随项目上传，请自行下载配置。**
+- 或可选安装 Pandoc（用于 Markdown/PDF 文档生成）。
 
 ---
 
