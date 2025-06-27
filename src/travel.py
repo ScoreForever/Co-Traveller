@@ -21,14 +21,11 @@ from dotenv import load_dotenv
 import subprocess
 import sys
 import os
-import math 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from src.utils.rag_helper import load_pdfs_from_folder, build_retriever_from_docs, stream_search_docs
 load_dotenv()
-import amap
-from src.amap import geocode_address, set_amap_api_key, process_route, create_map_html  
-import html2image
-import requests
+from src.amap import set_amap_api_key, process_route, create_map_html, geocode_location, calculate_driving_route  # 补充需要的函数
+
 
 
 def load_env(filepath):
@@ -818,6 +815,106 @@ def query_train(start, end, date):
     
     except Exception as e:
         return f"查询火车班次失败: {str(e)}"
+# 新增全局变量用于存储查票与行程规划的信息
+global_travel_info = {
+    "place1": "",
+    "date1": "",
+    "dests": [],
+    "date2": ""
+}
+
+# 修改 update_travel_plan 函数，保存信息到全局变量
+def update_travel_plan(place1, date1, *args):
+    """
+    手动实现DataFrame表格的流式输出，确保每次点击提交后读取的是本次生成的新内容。
+    通过延迟等待route_planner.py启动并写入新文件后再开始流式读取。
+    """
+    dests = []
+    for d in args[:-1]:
+        if d and d.strip():
+            dests.append(d.strip())
+    date2_val = args[-1]
+    if not dests or not date2_val:
+        yield "请至少填写一个目的地和返程日期", pd.DataFrame(columns=["日期", "时间", "地点", "活动", "交通"])
+        return
+
+    # 保存信息到全局变量
+    global global_travel_info
+    global_travel_info = {
+        "place1": place1,
+        "date1": date1,
+        "dests": dests,
+        "date2": date2_val
+    }
+def extract_trip_info(travel_plan):
+    """
+    从旅行规划 DataFrame 中提取日期、出发地和目的地信息
+    :param travel_plan: 旅行规划 DataFrame
+    :return: [(date, start, end), ...]
+    """
+    trips = []
+    rows = travel_plan.to_dict(orient='records')
+    for i in range(len(rows) - 1):
+        current_row = rows[i]
+        next_row = rows[i + 1]
+        if '交通' in current_row and '火车' in current_row['交通']:
+            date = current_row.get('日期', '')
+            start = current_row.get('地点', '')
+            end = next_row.get('地点', '')
+            if date and start and end:
+                trips.append((date, start, end))
+    return trips
+def query_round_trip_trains():
+    place1 = global_travel_info["place1"]
+    date1 = global_travel_info["date1"]
+    dests = global_travel_info["dests"]
+    date2 = global_travel_info["date2"]
+
+    # 提取行程规划中的信息
+    travel_plan = travel_plan_output.value
+    if travel_plan is not None and not travel_plan.empty:
+        trips = extract_trip_info(travel_plan)
+    else:
+        if not place1 or not date1 or not dests or not date2:
+            return pd.DataFrame(columns=["车次", "类型", "出发时间", "到达时间", "历时", "票价信息"])
+        dest = dests[0]  # 假设只取第一个目的地
+        trips = [(date1, place1, dest), (date2, dest, place1)]
+
+    all_trains = []
+    for date, start, end in trips:
+        trains = query_trains(start, end, date=date)
+        for train in trains:
+            price_info = []
+            price_fields = [
+                ("pricesw", "商务座"),
+                ("pricetd", "特等座"),
+                ("pricegr1", "高级软卧上铺"),
+                ("pricegr2", "高级软卧下铺"),
+                ("pricerw1", "软卧上铺"),
+                ("pricerw2", "软卧下铺"),
+                ("priceyw1", "硬卧上铺"),
+                ("priceyw2", "硬卧中铺"),
+                ("priceyw3", "硬卧下铺"),
+                ("priceyd", "一等座"),
+                ("priceed", "二等座"),
+            ]
+            for key, label in price_fields:
+                value = train.get(key, "")
+                value_str = str(value).strip()
+                if value_str and value_str != "0.0" and value_str != "-":
+                    price_info.append(f"{label}:{value_str}元")
+            price_str = " ".join(price_info)
+            all_trains.append([
+                train.get('trainno', ''),
+                train.get('type', ''),
+                train.get('departuretime', ''),
+                train.get('arrivaltime', ''),
+                train.get('costtime', ''),
+                price_str
+            ])
+
+    df = pd.DataFrame(all_trains, columns=["车次", "类型", "出发时间", "到达时间", "历时", "票价信息"])
+    return df
 
 #创建界面
 with gr.Blocks() as demo:
@@ -1177,7 +1274,7 @@ with gr.Blocks() as demo:
     
     with gr.Tab("🗺️ 路线规划"):
         gr.Markdown("# 🗺️ 高德地图路线规划")
-        gr.Markdown("输入起点和终点的位置名称（如：北京天安门、上海东方明珠），自动计算最佳路线")
+        gr.Markdown("输入起点和终点的位置名称（如：北京天安门、上海东方明珠），自动计算最佳驾车路线")
         
         with gr.Row():
             with gr.Column(scale=1):
@@ -1199,59 +1296,36 @@ with gr.Blocks() as demo:
                 
                 submit_btn = gr.Button("🚗 规划路线", variant="primary")
                 
-                # 路线类型选择
-                route_type = gr.Dropdown(
-                    label="路线类型",
-                    choices=["驾车", "公交"],
-                    value="驾车"
-                )
-
-                # 示例
                 gr.Examples(
                     examples=[
-                        ["北京天安门", "北京颐和园", "驾车"],
-                        ["上海外滩", "上海东方明珠", "公交"]
+                        ["北京天安门", "北京颐和园"],
+                        ["上海外滩", "上海东方明珠"],
+                        ["广州塔", "广州白云机场"]
                     ],
-                    inputs=[start_location, end_location, route_type],
+                    inputs=[start_location, end_location],
                     label="示例路线"
                 )
             
             with gr.Column(scale=2):
-                # 路线摘要
                 with gr.Group():
                     gr.Markdown("### 📊 路线摘要")
                     summary = gr.Textbox(label="路线信息", lines=4, interactive=False)
                 
-                # 路线地图 - 关键修复
                 with gr.Group():
                     gr.Markdown("### 🗺️ 路线地图")
                     map_display = gr.HTML(
                         label="路线可视化",
-                        elem_id="map-container",
-                        value="""
-                        <div style="
-                            height: 500px;
-                            background: #f8f9fa;
-                            border-radius: 15px;
-                            padding: 20px;
-                            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-                        ">
-                            <div style="height: 100%; width: 100%; display: flex; align-items: center; justify-content: center;">
-                                <p>等待路线规划...</p>
-                            </div>
-                        </div>
-                        """
+                        value="<div style='min-height:400px; display:flex; align-items:center; justify-content:center; background:#f0f0f0; border-radius:10px;'>等待路线规划...</div>"
                     )
                 
-                # 详细路线指引
                 with gr.Group():
                     gr.Markdown("### 🚥 详细路线指引")
                     step_instructions = gr.Textbox(label="导航步骤", lines=8, interactive=False)
         
-        # 事件处理
+        # 设置事件处理（注意：需确保process_route函数在当前作用域可用）
         submit_btn.click(
             fn=process_route,
-            inputs=[start_location, end_location, route_type],
+            inputs=[start_location, end_location],
             outputs=[summary, map_display, step_instructions]
         )
     # 天气查询Tab
@@ -1285,7 +1359,7 @@ with gr.Blocks() as demo:
             if not poi_info:
                 poi_info = {'address': place}
                 
-            lng, lat, detail = geocode_address(poi_info['address'])
+            lng, lat, detail, _ = amap.geocode_address(poi_info)
             if not lng or not lat:
                 return "", f"无法识别地点：{place}", "", None, ""
 
@@ -1505,33 +1579,71 @@ with gr.Blocks() as demo:
         """
         )
     #交通票务查询Tab
-    with gr.Tab("交通票务查询") :
+    with gr.Tab("交通票务查询"):
         gr.Markdown("## 火车票和机票查询系统")
-        
-        with gr.Row():
-            with gr.Column(scale=1):
-                start_input = gr.Textbox(label="出发地", placeholder="请输入城市名称")
-                end_input = gr.Textbox(label="目的地", placeholder="请输入城市名称")
-                date_input = gr.Textbox(label="日期", placeholder="YYYY-MM-DD")
-                
-                with gr.Row():
-                    airplane_btn = gr.Button("查询机票", variant="primary")
-                    train_btn = gr.Button("查询火车票", variant="secondary")
-            
-            with gr.Column(scale=2):
-                result_output = gr.Textbox(label="查询结果", lines=15)
-        
-        airplane_btn.click(
-            fn=query_airplane,
-            inputs=[start_input, end_input, date_input],
-            outputs=result_output
-        )
-        
-        train_btn.click(
-            fn=query_train,
-            inputs=[start_input, end_input, date_input],
-            outputs=result_output
-        )
 
+        with gr.Row():
+            with gr.Column(scale=2):
+                # 新增表格输出
+                train_table_output = gr.Dataframe(
+                    headers=["车次", "类型", "出发时间", "到达时间", "历时", "票价信息"],
+                    label="往返火车票查询结果",
+                    interactive=False
+                )
+
+        def query_round_trip_trains():
+            place1 = global_travel_info["place1"]
+            date1 = global_travel_info["date1"]
+            dests = global_travel_info["dests"]
+            date2 = global_travel_info["date2"]
+
+            if not place1 or not date1 or not dests or not date2:
+                return pd.DataFrame(columns=["车次", "类型", "出发时间", "到达时间", "历时", "票价信息"])
+
+            dest = dests[0]  # 假设只取第一个目的地
+            outbound_trains = query_trains(place1, dest, date=date1)
+            inbound_trains = query_trains(dest, place1, date=date2)
+
+            all_trains = []
+            for train in outbound_trains + inbound_trains:
+                price_info = []
+                price_fields = [
+                    ("pricesw", "商务座"),
+                    ("pricetd", "特等座"),
+                    ("pricegr1", "高级软卧上铺"),
+                    ("pricegr2", "高级软卧下铺"),
+                    ("pricerw1", "软卧上铺"),
+                    ("pricerw2", "软卧下铺"),
+                    ("priceyw1", "硬卧上铺"),
+                    ("priceyw2", "硬卧中铺"),
+                    ("priceyw3", "硬卧下铺"),
+                    ("priceyd", "一等座"),
+                    ("priceed", "二等座"),
+                ]
+                for key, label in price_fields:
+                    value = train.get(key, "")
+                    value_str = str(value).strip()
+                    if value_str and value_str != "0.0" and value_str != "-":
+                        price_info.append(f"{label}:{value_str}元")
+                price_str = " ".join(price_info)
+                all_trains.append([
+                    train.get('trainno', ''),
+                    train.get('type', ''),
+                    train.get('departuretime', ''),
+                    train.get('arrivaltime', ''),
+                    train.get('costtime', ''),
+                    price_str
+                ])
+
+            df = pd.DataFrame(all_trains, columns=["车次", "类型", "出发时间", "到达时间", "历时", "票价信息"])
+            return df
+
+        # 新增按钮，点击时触发查询
+        query_btn = gr.Button("查询往返火车票", variant="primary")
+        query_btn.click(
+            fn=query_round_trip_trains,
+            inputs=[],
+            outputs=train_table_output
+        )
 if __name__ == "__main__":
     demo.launch()
