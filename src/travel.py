@@ -21,18 +21,14 @@ from dotenv import load_dotenv
 import subprocess
 import sys
 import os
-import amap
-try:
-    from amap import geocode_address, set_amap_api_key, process_route, create_map_html
-except ImportError:
-    from src.amap import geocode_address, set_amap_api_key, process_route, create_map_html
-import html2image
-import requests
+import math 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from src.utils.rag_helper import load_pdfs_from_folder, build_retriever_from_docs, stream_search_docs
 load_dotenv()
-from src.amap import set_amap_api_key, process_route, create_map_html, geocode_location, calculate_driving_route  # 补充需要的函数
-
+import amap
+from src.amap import geocode_address, set_amap_api_key, process_route, create_map_html  
+import html2image
+import requests
 
 
 def load_env(filepath):
