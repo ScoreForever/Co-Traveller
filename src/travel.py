@@ -21,6 +21,13 @@ from dotenv import load_dotenv
 import subprocess
 import sys
 import os
+import amap
+try:
+    from amap import geocode_address, set_amap_api_key, process_route, create_map_html
+except ImportError:
+    from src.amap import geocode_address, set_amap_api_key, process_route, create_map_html
+import html2image
+import requests
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from src.utils.rag_helper import load_pdfs_from_folder, build_retriever_from_docs, stream_search_docs
 load_dotenv()
@@ -1174,7 +1181,7 @@ with gr.Blocks() as demo:
     
     with gr.Tab("🗺️ 路线规划"):
         gr.Markdown("# 🗺️ 高德地图路线规划")
-        gr.Markdown("输入起点和终点的位置名称（如：北京天安门、上海东方明珠），自动计算最佳驾车路线")
+        gr.Markdown("输入起点和终点的位置名称（如：北京天安门、上海东方明珠），自动计算最佳路线")
         
         with gr.Row():
             with gr.Column(scale=1):
@@ -1196,36 +1203,59 @@ with gr.Blocks() as demo:
                 
                 submit_btn = gr.Button("🚗 规划路线", variant="primary")
                 
+                # 路线类型选择
+                route_type = gr.Dropdown(
+                    label="路线类型",
+                    choices=["驾车", "公交"],
+                    value="驾车"
+                )
+
+                # 示例
                 gr.Examples(
                     examples=[
-                        ["北京天安门", "北京颐和园"],
-                        ["上海外滩", "上海东方明珠"],
-                        ["广州塔", "广州白云机场"]
+                        ["北京天安门", "北京颐和园", "驾车"],
+                        ["上海外滩", "上海东方明珠", "公交"]
                     ],
-                    inputs=[start_location, end_location],
+                    inputs=[start_location, end_location, route_type],
                     label="示例路线"
                 )
             
             with gr.Column(scale=2):
+                # 路线摘要
                 with gr.Group():
                     gr.Markdown("### 📊 路线摘要")
                     summary = gr.Textbox(label="路线信息", lines=4, interactive=False)
                 
+                # 路线地图 - 关键修复
                 with gr.Group():
                     gr.Markdown("### 🗺️ 路线地图")
                     map_display = gr.HTML(
                         label="路线可视化",
-                        value="<div style='min-height:400px; display:flex; align-items:center; justify-content:center; background:#f0f0f0; border-radius:10px;'>等待路线规划...</div>"
+                        elem_id="map-container",
+                        value="""
+                        <div style="
+                            height: 500px;
+                            background: #f8f9fa;
+                            border-radius: 15px;
+                            padding: 20px;
+                            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                        ">
+                            <div style="height: 100%; width: 100%; display: flex; align-items: center; justify-content: center;">
+                                <p>等待路线规划...</p>
+                            </div>
+                        </div>
+                        """
                     )
                 
+                # 详细路线指引
                 with gr.Group():
                     gr.Markdown("### 🚥 详细路线指引")
                     step_instructions = gr.Textbox(label="导航步骤", lines=8, interactive=False)
         
-        # 设置事件处理（注意：需确保process_route函数在当前作用域可用）
+        # 事件处理
         submit_btn.click(
             fn=process_route,
-            inputs=[start_location, end_location],
+            inputs=[start_location, end_location, route_type],
             outputs=[summary, map_display, step_instructions]
         )
     # 天气查询Tab
@@ -1259,7 +1289,7 @@ with gr.Blocks() as demo:
             if not poi_info:
                 poi_info = {'address': place}
                 
-            lng, lat, detail, _ = amap.geocode_address(poi_info)
+            lng, lat, detail = geocode_address(poi_info['address'])
             if not lng or not lat:
                 return "", f"无法识别地点：{place}", "", None, ""
 
