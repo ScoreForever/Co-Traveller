@@ -191,3 +191,6 @@ API.env
 
 # 忽略生成攻略
 /travel_guides/
+
+# 忽略wlhtmltopdf生成程序
+/scripts/wkhtmltopdf/

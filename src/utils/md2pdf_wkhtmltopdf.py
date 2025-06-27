@@ -14,7 +14,8 @@ def md_to_pdf(md_path, pdf_path, css_path=None):
         "/usr/local/bin/wkhtmltopdf",
         "/usr/bin/wkhtmltopdf",
         r"D:\wkhtmltopdf\bin\wkhtmltopdf.exe",
-        r"F:\北京大学\人工智能基础\大作业\外部库\wkhtmltopdf\bin\wkhtmltopdf.exe"
+        r"F:\北京大学\人工智能基础\大作业\外部库\wkhtmltopdf\bin\wkhtmltopdf.exe",
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "wkhtmltopdf", "bin", "wkhtmltopdf.exe"))
     ]
     for path in possible_paths:
         if os.path.exists(path):
