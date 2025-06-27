@@ -553,6 +553,54 @@ def query_train(start, end, date):
     
     except Exception as e:
         return f"查询火车班次失败: {str(e)}"
+    
+def save_travel_plan(filename):
+    """
+    保存当前旅行计划为PDF，支持自定义文件名。
+    """
+    import subprocess
+    import sys
+    from pathlib import Path
+    import os
+    import shutil
+
+    base_dir = Path(__file__).parent.parent.resolve()
+    temp_dir = base_dir / "temp" / "travel_plans"
+    guides_dir = base_dir / "travel_guides"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    guides_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. 调用plan_maker.py生成tourGuide.md
+    plan_maker_path = base_dir / "src" / "utils" / "plan_maker.py"
+    try:
+        subprocess.run([sys.executable, str(plan_maker_path)], cwd=str(temp_dir), check=True)
+    except Exception as e:
+        return f"调用plan_maker.py失败: {e}"
+
+    # 2. 调用md2pdf_wkhtmltopdf.py生成tourGuide.pdf
+    md2pdf_path = base_dir / "src" / "utils" / "md2pdf_wkhtmltopdf.py"
+    try:
+        subprocess.run([sys.executable, str(md2pdf_path)], cwd=str(base_dir), check=True)
+    except Exception as e:
+        return f"调用md2pdf_wkhtmltopdf.py失败: {e}"
+
+    # 3. 检查文件名并重命名
+    pdf_path = guides_dir / "tourGuide.pdf"
+    if not pdf_path.exists():
+        return "PDF文件未生成，保存失败"
+    if filename and filename.strip():
+        # 只保留文件名部分，自动加.pdf后缀
+        safe_name = "".join(c for c in filename.strip() if c not in r'\/:*?"<>|')
+        if not safe_name.lower().endswith(".pdf"):
+            safe_name += ".pdf"
+        target_path = guides_dir / safe_name
+        try:
+            shutil.move(str(pdf_path), str(target_path))
+            return f"已保存为 {target_path.name}"
+        except Exception as e:
+            return f"重命名PDF失败: {e}"
+    else:
+        return f"已保存为 {pdf_path.name}"
 
 #创建界面
 with gr.Blocks() as demo:
@@ -591,11 +639,16 @@ with gr.Blocks() as demo:
             label="旅行规划",
             interactive=False
         )
-
+        
         with gr.Row():
-            save_btn = gr.Button("💾 保存当前计划")
+            # 两个按钮上下排列（同一列）
+            with gr.Column():
+                generate_btn = gr.Button("📝 生成旅行攻略")
+                view_pdf_btn = gr.Button("📄 查看旅行攻略")
             filename_input = gr.Textbox(label="保存文件名", placeholder="可选，留空则自动生成")
-            save_status = gr.Textbox(label="保存状态", interactive=False)
+            generate_status = gr.Textbox(label="保存状态", interactive=False)
+        with gr.Row():
+            pdf_viewer = gr.HTML(label="旅行攻略PDF预览")
 
         # 动态显示下一个目的地和日期输入框
         def show_next_dest(text, index):
@@ -723,24 +776,38 @@ with gr.Blocks() as demo:
         clear_btn.click(
             fn=lambda: [None, None] + [None]*MAX_INPUTS + [None, None, None, None],
             inputs=[],
-            outputs=[place1, date1] + dest_inputs + [date2, ticket_url_output, travel_plan_output, save_status]
+            outputs=[place1, date1] + dest_inputs + [date2, ticket_url_output, travel_plan_output, generate_status]
         )
         
-        save_btn.click(
-    fn=lambda p1, d1, *dest_args, d2, ticket_link, plan_data, filename: save_travel_plan(
-        p1, d1, collect_destinations(*dest_args), d2, ticket_link, plan_data, filename
-    ),
-    inputs=[
-        place1, 
-        date1, 
-        *dest_inputs,  # 所有目的地输入框
-        date2, 
-        ticket_url_output, 
-        travel_plan_output, 
-        filename_input
-    ],
-    outputs=[save_status]
-)
+        generate_btn.click(
+            fn=save_travel_plan,
+            inputs=[filename_input],
+            outputs=[generate_status]
+        )
+
+        def show_pdf(_):
+            from pathlib import Path
+            import base64
+            guides_dir = Path(__file__).parent.parent / "travel_guides"
+            pdf_path = guides_dir / "tourGuide.pdf"
+            # 若有自定义文件名，优先显示最新修改的pdf
+            pdf_files = sorted(guides_dir.glob("*.pdf"), key=lambda f: f.stat().st_mtime, reverse=True)
+            if pdf_files:
+                pdf_path = pdf_files[0]
+            if not pdf_path.exists():
+                return "<div style='color:red;'>未找到旅行攻略PDF文件，请先生成。</div>"
+            with open(pdf_path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+            return f"""
+            <iframe src="data:application/pdf;base64,{b64}" width="100%" height="600px" style="border:none;"></iframe>
+            <div style="margin-top:8px;color:#888;">文件名：{pdf_path.name}</div>
+            """
+
+        view_pdf_btn.click(
+            fn=show_pdf,
+            inputs=[filename_input],  # 这里输入参数无实际用处，仅为触发
+            outputs=[pdf_viewer]
+        )
 
     with gr.Tab("🗺️ 路线规划"):
         gr.Markdown("# 🗺️ 高德地图路线规划")
@@ -1069,7 +1136,7 @@ with gr.Blocks() as demo:
             fn=query_train,
             inputs=[start_input, end_input, date_input],
             outputs=result_output
-        )
+        )    
 
 if __name__ == "__main__":
     demo.launch()
