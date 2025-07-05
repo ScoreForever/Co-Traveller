@@ -1,15 +1,14 @@
-import requests
 import os
 import json
-from dotenv import load_dotenv  # 用于加载环境变量
+from dotenv import load_dotenv
+import requests
 
 # 加载API.env中的环境变量
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../../API.env'))
 
-# 配置信息
-API_KEY = os.getenv("SILICON_API_KEY")  # 只从环境变量读取，不再硬编码
-API_URL = "https://api.siliconflow.cn/v1/chat/completions"  # 替换为实际API地址
-MODEL_NAME = "deepseek-ai/DeepSeek-V3"  # 如硅基的模型名称
+API_KEY = os.getenv("SILICON_API_KEY")
+API_URL = "https://api.siliconflow.cn/v1/chat/completions"
+MODEL_NAME = "deepseek-ai/DeepSeek-V3"
 
 def get_chat_response(messages, model_name):
     headers = {
@@ -22,46 +21,97 @@ def get_chat_response(messages, model_name):
     }
     try:
         response = requests.post(API_URL, headers=headers, json=data)
-        response.raise_for_status()  # 检查HTTP错误
+        response.raise_for_status()
         return response.json()["choices"][0]["message"]["content"]
     except Exception as e:
         return f"Error: {str(e)}"
 
+def read_plan_table(llm_path):
+    """
+    读取route_planning_LLMoutput.json（或jsonl/伪jsonl），返回表格内容字符串和结构化数据
+    支持每行一个json对象的情况（即使扩展名为.json）
+    """
+    table_rows = []
+    table_md = ""
+    # 判断是否为jsonl或每行一个json对象的json
+    with open(llm_path, "r", encoding="utf-8") as f:
+        first_line = f.readline()
+        f.seek(0)
+        try:
+            # 尝试整体解析为json数组
+            data = json.load(f)
+            if isinstance(data, list):
+                table_rows = data
+            else:
+                raise ValueError("旅行规划文件格式错误")
+        except json.JSONDecodeError:
+            # 回退为每行一个json对象
+            f.seek(0)
+            lines = f.readlines()
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                row = json.loads(line)
+                table_rows.append(row)
+    # 生成Markdown表格
+    headers = ["日期", "时间", "地点", "活动", "交通"]
+    table_md += "| " + " | ".join(headers) + " |\n"
+    table_md += "| " + " | ".join(["---"] * len(headers)) + " |\n"
+    for row in table_rows:
+        table_md += "| " + " | ".join([
+            str(row.get("date", "") or row.get("日期", "")),
+            str(row.get("time", "") or row.get("时间", "")),
+            str(row.get("location", "") or row.get("地点", "")),
+            str(row.get("activity", "") or row.get("活动", "")),
+            str(row.get("transport", "") or row.get("交通", "")),
+        ]) + " |\n"
+    return table_md, table_rows
+
 def main():
-    # 读取../../temp/GUIoutput.json文件
-    temp_dir = os.path.join(os.path.dirname(__file__), '../../temp')
-    json_path = os.path.join(temp_dir, "GUIoutput.json")
-    with open(json_path, "r", encoding="utf-8") as f:
-        user_data = json.load(f)
+    # 路径准备
+    temp_dir = os.path.join(os.path.dirname(__file__), '../../temp/travel_plans')
+    llm_path = os.path.join(temp_dir, "route_planning_LLMoutput.json")
+    if not os.path.exists(llm_path):
+        llm_path = llm_path.replace(".json", ".jsonl")
+    if not os.path.exists(llm_path):
+        print("未找到旅行规划文件")
+        return
 
-    model_name = user_data.get("modelName", MODEL_NAME)
-    budget = user_data.get("budget", "Medium")
-    intensity = user_data.get("intensity", "Medium")
-    user_text = user_data.get("userText", "")
+    # 读取旅行规划表格
+    table_md, table_rows = read_plan_table(llm_path)
 
-    # 构建系统提示词，融合预算和强度
-    prompt = (
-        "你是一个体贴的AI旅行规划助手，请根据用户的需求提供旅行建议和行程安排。"
-        "你需要给出一份完整的攻略，包括景点、交通、住宿、美食等信息。"
-        "你可以根据用户的需求进行个性化推荐。"
-        "你需要使用中文进行交流。"
-        f"用户预算等级为：{budget}，旅行节奏为：{intensity}。"
-        "（预算等级共有三级：Low、Medium、High；旅行节奏有三级：Relaxed、Medium、Intense）"
-        "请直接输出旅行攻略正文，不要添加任何开头的说明、总结、客套语或结尾提示。但你的排版需要精美一些。"
+    # 构建大模型提示词
+    system_prompt = (
+        "你是一个专业的AI旅行助手，请根据用户的旅行日程表，生成一份详细、美观、实用的旅行攻略。"
+        "攻略应包括每日亮点、推荐景点、餐饮建议、注意事项等，语言生动、排版美观，适合直接给用户阅读。"
+        "正文请用中文，避免冗余开头和结尾。"
+        "请充分利用表格中的信息，合理串联每日行程，适当补充背景介绍和实用建议。"
+        "正文后请保留“交通”“附录”两个板块，内容可先留空或简单说明，后续将补充导航、地图等元素。"
     )
 
-    # 初始化消息列表
+    # 将表格内容作为用户输入
+    user_content = (
+        "以下是用户的旅行日程表，请基于此生成攻略：\n\n"
+        + table_md +
+        "\n\n请严格按照上述表格内容生成攻略。"
+    )
+
     messages = [
-        {"role": "system", "content": prompt},
-        {"role": "user", "content": user_text}
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content}
     ]
 
     print("正在生成旅行攻略，请稍候...\n")
-    ai_response = get_chat_response(messages, model_name)
-    # 生成到../../temp/tourGuide.md
+    ai_response = get_chat_response(messages, MODEL_NAME)
+
+    # 拼接最终Markdown内容
     md_path = os.path.join(temp_dir, "tourGuide.md")
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(ai_response)
+        f.write("\n\n")
+        f.write("## 交通\n\n（本节后续将补充导航、地图等内容）\n\n")
+        f.write("## 附录\n\n（本节后续将补充相关附录内容）\n")
     print("AI旅行攻略已保存至 tourGuide.md")
 
 if __name__ == "__main__":

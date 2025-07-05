@@ -188,3 +188,9 @@ API.env
 # 忽略模型文件
 /models/
 /src/models/
+
+# 忽略生成攻略
+/travel_guides/
+
+# 忽略wlhtmltopdf生成程序
+/scripts/wkhtmltopdf/
